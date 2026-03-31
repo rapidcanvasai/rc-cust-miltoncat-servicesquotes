@@ -6,6 +6,7 @@ import rawWoData from './data/workOrders.json';
 import partsIndex from './data/partsData.json';
 import { getBaseModel, buildModelGroups } from './utils/modelGrouping';
 import { buildSimilarityIndex, findSimilarCombos, type SimilarityResult, type PartsIndex } from './utils/similarity';
+import { generateQuoteResult, type QuoteResult, type WoEntry } from './utils/quoteEngine';
 
 // ============================================
 // TYPES & DATA LOADING
@@ -20,6 +21,7 @@ interface StjEntry {
   sf: string;  // S=Shop, F=Field
   md?: string; // Modifier description
   sp?: string; // Serial prefix (first 3 chars of serial number)
+  dt?: string; // Date "YYYY-MM" (WO entries only)
 }
 
 interface RawData {
@@ -33,9 +35,28 @@ interface RawData {
 
 // Filter out STJ entries where parts, labor, and misc are all zero
 // (Tim Dailey: these were never flat-rate priced and are unreliable)
+// Normalize serial prefix case in pipe-delimited keys (e.g., "120H|dtd|010|1000" -> "120H|DTD|010|1000")
+// This merges entries that differ only by case (e.g., "dtd" vs "DTD" vs "Dtd")
+function normalizeSerialPrefixKeys(jobs: Record<string, StjEntry[]>): Record<string, StjEntry[]> {
+  const normalized: Record<string, StjEntry[]> = {};
+  for (const [key, entries] of Object.entries(jobs)) {
+    const parts = key.split('|');
+    const normKey = parts.length === 4
+      ? `${parts[0]}|${parts[1].toUpperCase()}|${parts[2]}|${parts[3]}`
+      : key;
+    if (normalized[normKey]) {
+      normalized[normKey].push(...entries);
+    } else {
+      normalized[normKey] = [...entries];
+    }
+  }
+  return normalized;
+}
+
 function filterZeroEntries(data: RawData): RawData {
+  const jobs = normalizeSerialPrefixKeys(data.jobs);
   const filteredJobs: Record<string, StjEntry[]> = {};
-  for (const [key, entries] of Object.entries(data.jobs)) {
+  for (const [key, entries] of Object.entries(jobs)) {
     const nonZero = entries.filter(e => !(e.p === 0 && e.l === 0 && e.m === 0));
     if (nonZero.length > 0) {
       filteredJobs[key] = nonZero;
@@ -47,8 +68,9 @@ function filterZeroEntries(data: RawData): RawData {
 // Filter out WO entries that are misc-only (labor=0 AND parts=0)
 // (Tim Dailey: misc-only records should be disregarded entirely)
 function filterMiscOnlyEntries(data: RawData): RawData {
+  const jobs = normalizeSerialPrefixKeys(data.jobs);
   const filteredJobs: Record<string, StjEntry[]> = {};
-  for (const [key, entries] of Object.entries(data.jobs)) {
+  for (const [key, entries] of Object.entries(jobs)) {
     const valid = entries.filter(e => !(e.p === 0 && e.l === 0 && e.m > 0));
     if (valid.length > 0) {
       filteredJobs[key] = valid;
@@ -79,8 +101,6 @@ function mergeArrayById<T extends { id?: string; code?: string }>(a: T[], b: T[]
   for (const item of a) map.set(item[key]!, item); // STJ overwrites WO
   return Array.from(map.values()).sort((x, y) => (x[key]! > y[key]! ? 1 : -1));
 }
-
-type DataSource = 'stj' | 'wo';
 
 const MERGED_MODELS = mergeArrayById(STJ_DATA.models, WO_DATA.models, 'id')
   .filter(m => m.id.trim() !== ''); // Exclude empty model IDs
@@ -222,9 +242,29 @@ for (const [base, group] of MODEL_GROUPS) {
   }
 }
 
+// Normalize partsData keys to uppercase serial prefix
+function normalizePartsKeys(data: PartsIndex): PartsIndex {
+  const normalized: PartsIndex = {};
+  for (const [key, entries] of Object.entries(data)) {
+    const parts = key.split('|');
+    const normKey = parts.length === 4
+      ? `${parts[0]}|${parts[1].toUpperCase()}|${parts[2]}|${parts[3]}`
+      : key;
+    if (normalized[normKey]) {
+      // If duplicate after normalization, keep the one with more entries
+      if (entries.length > normalized[normKey].length) {
+        normalized[normKey] = entries;
+      }
+    } else {
+      normalized[normKey] = entries;
+    }
+  }
+  return normalized;
+}
+
 // Build similarity index from parts data joined with work orders
-const PARTS_DATA = partsIndex as PartsIndex;
-const SIMILARITY_INDEX = buildSimilarityIndex(PARTS_DATA, WO_DATA.jobs as Record<string, Array<{ l: number }>>);
+const PARTS_DATA = normalizePartsKeys(partsIndex as PartsIndex);
+const SIMILARITY_INDEX = buildSimilarityIndex(PARTS_DATA, WO_DATA.jobs as Record<string, Array<{ l: number; m: number; p: number; dt?: string }>>);
 
 const TOTAL_STJS = Object.values(STJ_DATA.jobs).reduce((sum, arr) => sum + arr.length, 0);
 const TOTAL_WOS = Object.values(WO_DATA.jobs).reduce((sum, arr) => sum + arr.length, 0);
@@ -232,120 +272,6 @@ const TOTAL_STJ_COMBOS = Object.keys(STJ_DATA.jobs).length;
 const TOTAL_WO_COMBOS = Object.keys(WO_DATA.jobs).length;
 const ALL_COMBO_KEYS = new Set([...Object.keys(STJ_DATA.jobs), ...Object.keys(WO_DATA.jobs)]);
 const TOTAL_COMBOS = ALL_COMBO_KEYS.size;
-
-// ============================================
-// HELPER: Lookup matching STJs and compute quote
-// ============================================
-
-function lookupQuote(baseModelId: string, serialPrefix: string | null, jobCode: string, compCode: string) {
-  // Look up across all model group members (per Tim Dailey: group variants)
-  const group = MODEL_GROUPS.get(baseModelId);
-  const memberIds = group ? group.members : [baseModelId];
-
-  let allStjEntries: StjEntry[] = [];
-  let allWoEntries: StjEntry[] = [];
-
-  for (const memberId of memberIds) {
-    // Build key based on whether serial prefix is available
-    const key = HAS_SERIAL_PREFIX
-      ? `${memberId}|${serialPrefix || ''}|${jobCode}|${compCode}`
-      : `${memberId}|${jobCode}|${compCode}`;
-    allStjEntries.push(...(STJ_DATA.jobs[key] || []));
-    allWoEntries.push(...(WO_DATA.jobs[key] || []));
-  }
-
-  // STJ-first, WO-fallback (per Tim Dailey's instruction)
-  let entries: StjEntry[];
-  let source: DataSource;
-
-  if (allStjEntries.length > 0) {
-    entries = allStjEntries;
-    source = 'stj';
-  } else if (allWoEntries.length > 0) {
-    entries = allWoEntries;
-    source = 'wo';
-  } else {
-    return null;
-  }
-
-  const totals = entries.map(e => e.p + e.l + e.m);
-  const durations = entries.map(e => e.d);
-  const partsArr = entries.map(e => e.p);
-  const laborArr = entries.map(e => e.l);
-  const miscArr = entries.map(e => e.m);
-
-  const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  const avgNonZero = (arr: number[]) => {
-    const nonZero = arr.filter(v => v > 0);
-    return nonZero.length > 0 ? nonZero.reduce((a, b) => a + b, 0) / nonZero.length : 0;
-  };
-  const stdDev = (arr: number[]) => {
-    const mean = avg(arr);
-    return Math.sqrt(arr.map(x => (x - mean) ** 2).reduce((a, b) => a + b, 0) / arr.length);
-  };
-
-  const avgTotal = avg(totals);
-  const totalStd = stdDev(totals);
-  const avgDuration = avg(durations);
-
-  // Confidence: STJ = high baseline, WO = lower baseline
-  let confidence = 'HIGH';
-  let confidenceScore: number;
-  const count = entries.length;
-
-  if (source === 'stj') {
-    // Standard Jobs: ALWAYS high confidence (per Tim Dailey, Feb 2026)
-    // Score scales with record count for granularity
-    confidence = 'HIGH';
-    if (count === 1)       confidenceScore = 100;
-    else if (count <= 3)   confidenceScore = 88;
-    else if (count <= 5)   confidenceScore = 90;
-    else if (count <= 10)  confidenceScore = 93;
-    else                   confidenceScore = 96;
-  } else {
-    // Work Orders: confidence based on record count and variance
-    confidenceScore = 75;
-    if (count <= 2) { confidence = 'LOW'; confidenceScore = 30; }
-    else if (count <= 5) { confidence = 'LOW'; confidenceScore = 50; }
-    else if (count <= 10) { confidence = 'MEDIUM'; confidenceScore = 62; }
-    else if (count <= 20) { confidence = 'MEDIUM'; confidenceScore = 70; }
-  }
-
-  const cv = avgTotal > 0 ? totalStd / avgTotal : 0;
-
-  // CV penalty only applies to work orders (STJs are always HIGH)
-  if (source === 'wo') {
-    if (cv > 0.5) { confidenceScore -= 20; if (confidence === 'HIGH') confidence = 'MEDIUM'; }
-    else if (cv > 0.3) { confidenceScore -= 10; if (confidence === 'HIGH') confidence = 'MEDIUM'; }
-
-    if (count >= 10 && cv < 0.2) { confidenceScore = Math.min(98, confidenceScore + 5); }
-
-    confidenceScore = Math.max(15, Math.min(98, confidenceScore));
-    if (confidenceScore >= 85) confidence = 'HIGH';
-    else if (confidenceScore >= 60) confidence = 'MEDIUM';
-    else confidence = 'LOW';
-  }
-
-  return {
-    entries,
-    source,
-    count,
-    avgParts: Math.round(source === 'wo' ? avgNonZero(partsArr) : avg(partsArr)),
-    avgLabor: Math.round(source === 'wo' ? avgNonZero(laborArr) : avg(laborArr)),
-    avgMisc: Math.round(source === 'wo' ? avgNonZero(miscArr) : avg(miscArr)),
-    avgTotal: Math.round(source === 'wo'
-      ? (avgNonZero(laborArr) + avgNonZero(partsArr) + avgNonZero(miscArr))
-      : avgTotal),
-    avgDuration: Math.round(avgDuration * 10) / 10,
-    lowTotal: Math.round(Math.min(...totals)),
-    highTotal: Math.round(Math.max(...totals)),
-    lowDuration: Math.round(Math.min(...durations) * 10) / 10,
-    highDuration: Math.round(Math.max(...durations) * 10) / 10,
-    stdDev: Math.round(totalStd),
-    confidence,
-    confidenceScore,
-  };
-}
 
 // ============================================
 // MAIN APPLICATION COMPONENT
@@ -432,26 +358,36 @@ const App = () => {
     if (HAS_SERIAL_PREFIX && !selectedSerialPrefix) return;
     setIsGenerating(true);
     setTimeout(() => {
-      const result = lookupQuote(selectedModel.id, selectedSerialPrefix, selectedJobCode.code, selectedCompCode.code);
-      if (!result) {
-        setIsGenerating(false);
-        alert('No standard jobs or work orders found for this combination.');
-        return;
-      }
-      // Compute similarity matches if parts data exists for this combo
-      let similarCombos: SimilarityResult[] = [];
       const group = MODEL_GROUPS.get(selectedModel.id);
       const memberIds = group ? group.members : [selectedModel.id];
+
+      let allStjEntries: StjEntry[] = [];
+      let allWoEntries: StjEntry[] = [];
+      const allMemberKeys: string[] = [];
+
       for (const memberId of memberIds) {
         const key = HAS_SERIAL_PREFIX
           ? `${memberId}|${selectedSerialPrefix || ''}|${selectedJobCode.code}|${selectedCompCode.code}`
           : `${memberId}|${selectedJobCode.code}|${selectedCompCode.code}`;
-        const input = SIMILARITY_INDEX.get(key);
-        if (input) {
-          const candidates = [...SIMILARITY_INDEX.values()];
-          similarCombos = findSimilarCombos(input, candidates, 5, 15);
-          break;
-        }
+        allMemberKeys.push(key);
+        allStjEntries.push(...(STJ_DATA.jobs[key] || []));
+        allWoEntries.push(...(WO_DATA.jobs[key] || []));
+      }
+
+      const result = generateQuoteResult(
+        allStjEntries as WoEntry[],
+        allWoEntries as WoEntry[],
+        PARTS_DATA,
+        SIMILARITY_INDEX,
+        allMemberKeys,
+        WO_DATA.jobs as Record<string, WoEntry[]>,
+      );
+
+      if (!result) {
+        setIsGenerating(false);
+        setQuoteData({ insufficientData: true });
+        setShowQuoteResult(true);
+        return;
       }
 
       setQuoteData({
@@ -460,7 +396,6 @@ const App = () => {
         jobCode: selectedJobCode,
         compCode: selectedCompCode,
         ...result,
-        similarCombos,
         quoteId: `Q${Date.now().toString(36).toUpperCase()}`,
         generatedAt: new Date().toISOString(),
       });
@@ -673,9 +608,9 @@ const App = () => {
           {/* Generate Button */}
           <button
             onClick={generateQuote}
-            disabled={!selectedModel || !selectedJobCode || !selectedCompCode || isGenerating}
+            disabled={!selectedModel || (HAS_SERIAL_PREFIX && !selectedSerialPrefix) || !selectedJobCode || !selectedCompCode || isGenerating}
             className={`w-full p-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all ${
-              selectedModel && selectedJobCode && selectedCompCode
+              selectedModel && (!HAS_SERIAL_PREFIX || selectedSerialPrefix) && selectedJobCode && selectedCompCode
                 ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-lg hover:shadow-xl'
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
@@ -696,17 +631,35 @@ const App = () => {
       ) : (
         /* Quote Result View */
         <div className="p-4 space-y-4">
+          {quoteData.insufficientData ? (
+            <div className="bg-white rounded-xl p-8 text-center">
+              <AlertTriangle size={48} className="mx-auto text-gray-400 mb-4" />
+              <h3 className="text-xl font-bold text-gray-700 mb-2">Insufficient Data</h3>
+              <p className="text-gray-500 text-sm">
+                No standard jobs, work orders, or sufficiently similar combinations were found for this combination.
+              </p>
+              <button onClick={resetQuote} className="mt-4 px-6 py-2 text-amber-600 font-medium">
+                ← New Quote
+              </button>
+            </div>
+          ) : (
+          <>
           <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl p-5 text-white shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <div className="text-amber-400 text-xs font-medium">
-                  {quoteData.source === 'stj' ? 'STANDARD JOB QUOTE' : 'WORK ORDER HISTORY QUOTE'}
+                  {quoteData.tier === 1 ? 'STANDARD JOB QUOTE' : quoteData.tier === 2 ? 'WORK ORDER HISTORY QUOTE' : 'ESTIMATE BASED ON SIMILAR JOBS'}
                 </div>
                 <div className="font-mono text-sm text-gray-400">{quoteData.quoteId}</div>
               </div>
-              <span className={`px-3 py-1 rounded-full text-xs font-bold border ${getConfidenceColor(quoteData.confidence)}`}>
-                {quoteData.confidence} CONFIDENCE
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-700 text-gray-300">
+                  TIER {quoteData.tier}
+                </span>
+                <span className={`px-3 py-1 rounded-full text-xs font-bold border ${getConfidenceColor(quoteData.confidence)}`}>
+                  {quoteData.confidence} CONFIDENCE
+                </span>
+              </div>
             </div>
 
             <div className="mb-4">
@@ -739,7 +692,7 @@ const App = () => {
               <div className="flex items-center gap-2">
                 <History size={16} className="text-gray-400" />
                 <span className="text-gray-400">
-                  {quoteData.count} {quoteData.source === 'stj' ? 'standard job' : 'work order'}{quoteData.count !== 1 ? 's' : ''}
+                  {quoteData.count} {quoteData.tier === 1 ? 'standard job' : quoteData.tier === 2 ? 'work order' : 'similar job'}{quoteData.count !== 1 ? 's' : ''}
                 </span>
               </div>
             </div>
@@ -760,12 +713,39 @@ const App = () => {
               <div>
                 <div className="font-bold text-lg">{quoteData.confidenceScore}% Confidence</div>
                 <div className="text-sm mt-1">
-                  Based on {quoteData.count} {quoteData.source === 'stj' ? 'standard job' : 'work order'}{quoteData.count !== 1 ? 's' : ''} with ${quoteData.stdDev.toLocaleString()} price variance
-                  {quoteData.source === 'wo' && <span className="block mt-1 text-xs opacity-75">Source: Historical work orders (no standard job available)</span>}
+                  Based on {quoteData.count} {quoteData.tier === 1 ? 'standard job' : quoteData.tier === 2 ? 'work order' : 'similar job'}{quoteData.count !== 1 ? 's' : ''} with ${quoteData.stdDev.toLocaleString()} price variance
+                  {quoteData.tier === 2 && <span className="block mt-1 text-xs opacity-75">Source: Historical work orders (no standard job available)</span>}
+                  {quoteData.tier === 3 && !quoteData.tierOverride && <span className="block mt-1 text-xs opacity-75">Source: Estimate from similar job combinations</span>}
                 </div>
+                {quoteData.confidenceBreakdown && quoteData.tier === 2 && (
+                  <details className="mt-2 text-xs">
+                    <summary className="cursor-pointer opacity-75">Score breakdown</summary>
+                    <div className="mt-1 space-y-0.5 opacity-75">
+                      <div>Base (count): {quoteData.confidenceBreakdown.baseScore}</div>
+                      <div>CV adjustment: {quoteData.confidenceBreakdown.cvAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.cvAdjustment}</div>
+                      <div>Similarity: {quoteData.confidenceBreakdown.similarityAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.similarityAdjustment}</div>
+                    </div>
+                  </details>
+                )}
               </div>
             </div>
           </div>
+
+          {/* Tier Override Note */}
+          {quoteData.tierOverride && (
+            <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
+              <AlertCircle size={16} className="text-blue-500 flex-shrink-0 mt-0.5" />
+              <span>{quoteData.tierOverrideNote}</span>
+            </div>
+          )}
+
+          {/* Deviation Warning */}
+          {quoteData.deviationWarning && (
+            <div className="flex items-start gap-2 p-3 bg-orange-50 border border-orange-200 rounded-xl text-sm text-orange-800">
+              <AlertTriangle size={16} className="text-orange-500 flex-shrink-0 mt-0.5" />
+              <span>Recent pricing trend diverges from historical median.</span>
+            </div>
+          )}
 
           {/* Cost Breakdown */}
           <div className="bg-white rounded-xl p-4 shadow-sm">
@@ -781,7 +761,7 @@ const App = () => {
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2">
                   <Package size={18} className="text-gray-400" />
-                  <span>Parts</span>
+                  <span>Parts{quoteData.partsRepriced ? ' (catalog)' : quoteData.partsFallbackToHistorical ? ' (historical)' : ''}</span>
                 </div>
                 <span className="font-bold">${quoteData.avgParts.toLocaleString()}</span>
               </div>
@@ -802,10 +782,11 @@ const App = () => {
             </div>
           </div>
 
-          {/* Standard Jobs List */}
+          {/* Standard Jobs / Work Orders List */}
+          {quoteData.entries && quoteData.entries.length > 0 && (
           <div className="bg-white rounded-xl p-4 shadow-sm">
             <h3 className="font-bold text-gray-900 mb-3">
-              {quoteData.source === 'stj' ? 'Matching Standard Jobs' : 'Matching Work Orders'} ({quoteData.count})
+              {quoteData.tier === 1 ? 'Matching Standard Jobs' : quoteData.tier === 2 ? 'Matching Work Orders' : 'Reference Work Orders'} ({quoteData.entries.length})
             </h3>
             <div className="space-y-2">
               {quoteData.entries.slice(0, 6).map((stj: StjEntry, idx: number) => (
@@ -825,20 +806,21 @@ const App = () => {
                   </div>
                 </div>
               ))}
-              {quoteData.count > 6 && (
+              {quoteData.entries.length > 6 && (
                 <div className="text-center text-sm text-gray-400 pt-2">
-                  +{quoteData.count - 6} more {quoteData.source === 'stj' ? 'standard jobs' : 'work orders'}
+                  +{quoteData.entries.length - 6} more {quoteData.tier === 1 ? 'standard jobs' : 'work orders'}
                 </div>
               )}
             </div>
           </div>
+          )}
 
           {/* Similarity Matches */}
           {quoteData.similarCombos && quoteData.similarCombos.length > 0 && (
             <div className="bg-white rounded-xl p-4 shadow-sm">
               <h3 className="font-bold text-gray-900 mb-1 flex items-center gap-2">
                 <Target size={18} className="text-amber-500" />
-                Similar Combinations
+                {quoteData.tier === 3 ? 'Similar Jobs Used for Estimate' : 'Similar Combinations'}
               </h3>
               <p className="text-xs text-gray-500 mb-3">Based on parts overlap and labor cost analysis</p>
               <div className="space-y-3">
@@ -903,10 +885,176 @@ const App = () => {
               ← New Quote
             </button>
           </div>
+          </>
+          )}
         </div>
       )}
     </div>
   );
+
+  // ============================================
+  // REFLEXIVE ANALYTICS (right-hand side, Desktop)
+  // ============================================
+  const ReflexiveAnalytics = ({ selectedModel, selectedSerialPrefix }: { selectedModel: any; selectedSerialPrefix: string | null }) => {
+    const analytics = useMemo(() => {
+      if (!selectedModel) return null;
+
+      const group = MODEL_GROUPS.get(selectedModel.id);
+      const memberIds = group ? group.members : [selectedModel.id];
+
+      // Count WO entries for each job code, comp code, and job+comp combo
+      // across all model group members matching the selected serial prefix
+      const jobCounts: Record<string, number> = {};
+      const compCounts: Record<string, number> = {};
+      const comboCounts: Record<string, number> = {};
+      let totalWOs = 0;
+
+      for (const memberId of memberIds) {
+        for (const [key, entries] of Object.entries(WO_DATA.jobs)) {
+          const parsed = parseKey(key);
+          if (parsed.model !== memberId) continue;
+          if (HAS_SERIAL_PREFIX && selectedSerialPrefix && parsed.serialPrefix !== selectedSerialPrefix) continue;
+
+          const count = (entries as any[]).length;
+          totalWOs += count;
+
+          jobCounts[parsed.jobCode] = (jobCounts[parsed.jobCode] || 0) + count;
+          compCounts[parsed.compCode] = (compCounts[parsed.compCode] || 0) + count;
+
+          const comboKey = `${parsed.jobCode}|${parsed.compCode}`;
+          comboCounts[comboKey] = (comboCounts[comboKey] || 0) + count;
+        }
+      }
+
+      const topCombos = Object.entries(comboCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([key, count]) => {
+          const [jc, cc] = key.split('|');
+          return { jc, cc, count };
+        });
+
+      const topJobs = Object.entries(jobCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8);
+
+      const topComps = Object.entries(compCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8);
+
+      return { topCombos, topJobs, topComps, totalWOs };
+    }, [selectedModel, selectedSerialPrefix]);
+
+    if (!analytics || analytics.totalWOs === 0) {
+      return (
+        <div className="bg-white rounded-xl shadow-sm p-6 text-center">
+          <AlertTriangle size={32} className="mx-auto text-gray-300 mb-2" />
+          <p className="text-sm text-gray-400">No work order history found for this selection.</p>
+        </div>
+      );
+    }
+
+    const { topCombos, topJobs, topComps, totalWOs } = analytics;
+    const maxComboCount = topCombos[0]?.count || 1;
+    const maxJobCount = topJobs[0]?.[1] || 1;
+    const maxCompCount = topComps[0]?.[1] || 1;
+
+    const label = `${selectedModel.id}${selectedSerialPrefix ? ` [${selectedSerialPrefix}]` : ''}`;
+
+    return (
+      <>
+        {/* Header */}
+        <div className="bg-white rounded-xl shadow-sm p-4">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+              <BarChart3 size={20} className="text-amber-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900">Work Order History</h3>
+              <p className="text-sm text-gray-500">{label} — {totalWOs.toLocaleString()} work orders</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Top Job + Comp Combinations */}
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b bg-gray-50">
+            <h3 className="font-bold text-gray-900 text-sm">Most Frequent Job + Component Combinations</h3>
+            <p className="text-xs text-gray-400">For {label}</p>
+          </div>
+          <div className="p-4 space-y-2">
+            {topCombos.map(({ jc, cc, count }, idx) => {
+              const jcDesc = JOB_CODES.find(j => j.code === jc)?.desc || jc;
+              const ccDesc = COMP_CODES.find(c => c.code === cc)?.desc || cc;
+              return (
+                <div key={idx}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium text-gray-900 truncate block">{jcDesc}</span>
+                      <span className="text-xs text-gray-500 truncate block">{ccDesc}</span>
+                    </div>
+                    <span className="text-sm font-bold text-amber-600 ml-2 flex-shrink-0">{count.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5">
+                    <div className="h-1.5 rounded-full bg-amber-500" style={{ width: `${(count / maxComboCount) * 100}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+            {topCombos.length === 0 && <p className="text-sm text-gray-400">No data</p>}
+          </div>
+        </div>
+
+        {/* Most Frequent Job Codes */}
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b bg-gray-50">
+            <h3 className="font-bold text-gray-900 text-sm">Most Frequent Job Codes</h3>
+            <p className="text-xs text-gray-400">For {label}</p>
+          </div>
+          <div className="p-4 space-y-2">
+            {topJobs.map(([code, count], idx) => {
+              const desc = JOB_CODES.find(j => j.code === code)?.desc || code;
+              return (
+                <div key={idx}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium">{code} — {desc}</span>
+                    <span className="text-sm font-bold text-blue-600">{count.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5">
+                    <div className="h-1.5 rounded-full bg-blue-500" style={{ width: `${(count / maxJobCount) * 100}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Most Frequent Component Codes */}
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b bg-gray-50">
+            <h3 className="font-bold text-gray-900 text-sm">Most Frequent Component Codes</h3>
+            <p className="text-xs text-gray-400">For {label}</p>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {topComps.map(([code, count], idx) => {
+              const desc = COMP_CODES.find(c => c.code === code)?.desc || code;
+              return (
+                <div key={idx} className="px-4 py-2 flex justify-between items-center">
+                  <div>
+                    <div className="font-mono text-xs text-gray-500">{code}</div>
+                    <div className="text-sm font-medium">{desc}</div>
+                  </div>
+                  <div className="text-right">
+                    <span className="font-bold text-sm text-purple-600">{count.toLocaleString()}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </>
+    );
+  };
 
   // ============================================
   // DESKTOP ADMIN VIEW
@@ -1087,19 +1235,33 @@ const App = () => {
               </div>
 
               {/* Quote Result */}
-              {quoteData && (
+              {quoteData && quoteData.insufficientData && (
+                <div className="bg-white rounded-xl shadow-sm p-8 text-center">
+                  <AlertTriangle size={48} className="mx-auto text-gray-400 mb-4" />
+                  <h3 className="text-xl font-bold text-gray-700 mb-2">Insufficient Data</h3>
+                  <p className="text-gray-500">
+                    No standard jobs, work orders, or sufficiently similar combinations were found for this combination.
+                  </p>
+                </div>
+              )}
+              {quoteData && !quoteData.insufficientData && (
                 <div className="bg-white rounded-xl shadow-sm overflow-hidden">
                   <div className="bg-gradient-to-r from-gray-900 to-gray-800 px-6 py-4 flex items-center justify-between">
                     <div>
                       <div className="text-amber-400 text-sm font-medium">
-                        {quoteData.source === 'stj' ? 'STANDARD JOB QUOTE' : 'WORK ORDER HISTORY QUOTE'}
+                        {quoteData.tier === 1 ? 'STANDARD JOB QUOTE' : quoteData.tier === 2 ? 'WORK ORDER HISTORY QUOTE' : 'ESTIMATE BASED ON SIMILAR JOBS'}
                       </div>
                       <div className="text-white text-xl font-bold">
                         {quoteData.model.id}{quoteData.serialPrefix ? ` [${quoteData.serialPrefix}]` : ''} - {quoteData.jobCode.desc} {quoteData.compCode.desc}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-gray-400 text-sm">{quoteData.quoteId}</div>
+                    <div className="text-right flex items-center gap-3">
+                      <div>
+                        <div className="text-gray-400 text-sm">{quoteData.quoteId}</div>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-700 text-gray-300">
+                        TIER {quoteData.tier}
+                      </span>
                       <span className={`px-3 py-1 rounded-full text-sm font-bold border ${getConfidenceColor(quoteData.confidence)}`}>
                         {quoteData.confidenceScore}% {quoteData.confidence}
                       </span>
@@ -1131,11 +1293,11 @@ const App = () => {
                         <table className="w-full">
                           <tbody className="divide-y divide-gray-100">
                             <tr>
-                              <td className="py-3 text-gray-600">Labor (avg across {quoteData.count} {quoteData.source === 'stj' ? 'STJs' : 'WOs'})</td>
+                              <td className="py-3 text-gray-600">Labor ({quoteData.tier === 2 ? 'recency-weighted' : 'avg'} across {quoteData.count} {quoteData.tier === 1 ? 'STJs' : quoteData.tier === 2 ? 'WOs' : 'similar jobs'})</td>
                               <td className="py-3 text-right font-bold">${quoteData.avgLabor.toLocaleString()}</td>
                             </tr>
                             <tr>
-                              <td className="py-3 text-gray-600">Parts (avg)</td>
+                              <td className="py-3 text-gray-600">Parts{quoteData.partsRepriced ? ' (current catalog pricing)' : quoteData.partsFallbackToHistorical ? ' (historical avg)' : ' (avg)'}</td>
                               <td className="py-3 text-right font-bold">${quoteData.avgParts.toLocaleString()}</td>
                             </tr>
                             <tr>
@@ -1160,7 +1322,7 @@ const App = () => {
                           <div className="space-y-2 text-sm">
                             <div className="flex items-center gap-2">
                               <History size={16} className="text-blue-600" />
-                              <span>{quoteData.count} {quoteData.source === 'stj' ? 'standard jobs' : 'work orders'}</span>
+                              <span>{quoteData.count} {quoteData.tier === 1 ? 'standard jobs' : quoteData.tier === 2 ? 'work orders' : 'similar jobs'}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <BarChart3 size={16} className="text-purple-600" />
@@ -1183,16 +1345,46 @@ const App = () => {
                       </div>
                     </div>
 
-                    {/* STJ Details Table */}
+                    {/* Tier Override Note */}
+                    {quoteData.tierOverride && (
+                      <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 mb-4">
+                        <AlertCircle size={18} className="text-blue-500 flex-shrink-0 mt-0.5" />
+                        <span>{quoteData.tierOverrideNote}</span>
+                      </div>
+                    )}
+
+                    {/* Deviation Warning */}
+                    {quoteData.deviationWarning && (
+                      <div className="flex items-start gap-3 p-4 bg-orange-50 border border-orange-200 rounded-lg text-sm text-orange-800 mb-4">
+                        <AlertTriangle size={18} className="text-orange-500 flex-shrink-0 mt-0.5" />
+                        <span>Recent pricing trend diverges from historical median.</span>
+                      </div>
+                    )}
+
+                    {/* Confidence Breakdown */}
+                    {quoteData.confidenceBreakdown && quoteData.tier === 2 && (
+                      <div className="mb-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
+                        <div className="font-medium text-gray-700 mb-1">Confidence Score Breakdown</div>
+                        <div className="flex gap-6">
+                          <span>Base (count): {quoteData.confidenceBreakdown.baseScore}</span>
+                          <span>CV adjustment: {quoteData.confidenceBreakdown.cvAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.cvAdjustment}</span>
+                          <span>Similarity: {quoteData.confidenceBreakdown.similarityAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.similarityAdjustment}</span>
+                          <span className="font-medium text-gray-900">= {quoteData.confidenceScore}%</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* STJ / WO Details Table */}
+                    {quoteData.entries && quoteData.entries.length > 0 && (
                     <div className="border-t pt-6">
                       <h3 className="font-bold text-gray-900 mb-4">
-                        {quoteData.source === 'stj' ? 'Standard Job Details' : 'Work Order Details'} ({quoteData.count})
+                        {quoteData.tier === 1 ? 'Standard Job Details' : quoteData.tier === 2 ? 'Work Order Details' : 'Reference Work Orders'} ({quoteData.entries.length})
                       </h3>
                       <div className="overflow-hidden rounded-lg border border-gray-200">
                         <table className="w-full text-sm">
                           <thead className="bg-gray-50">
                             <tr>
-                              <th className="px-4 py-3 text-left font-semibold text-gray-600">{quoteData.source === 'stj' ? 'STJ ID' : 'Segment ID'}</th>
+                              <th className="px-4 py-3 text-left font-semibold text-gray-600">{quoteData.tier === 1 ? 'STJ ID' : 'Segment ID'}</th>
                               <th className="px-4 py-3 text-left font-semibold text-gray-600">Modifier</th>
                               <th className="px-4 py-3 text-left font-semibold text-gray-600">Shop/Field</th>
                               <th className="px-4 py-3 text-right font-semibold text-gray-600">Parts</th>
@@ -1217,20 +1409,21 @@ const App = () => {
                             ))}
                           </tbody>
                         </table>
-                        {quoteData.count > 15 && (
+                        {quoteData.entries.length > 15 && (
                           <div className="text-center py-3 text-sm text-gray-500 bg-gray-50 border-t">
-                            Showing 15 of {quoteData.count} {quoteData.source === 'stj' ? 'standard jobs' : 'work orders'}
+                            Showing 15 of {quoteData.entries.length} {quoteData.tier === 1 ? 'standard jobs' : 'work orders'}
                           </div>
                         )}
                       </div>
                     </div>
+                    )}
 
                     {/* Similarity Matches - Desktop */}
                     {quoteData.similarCombos && quoteData.similarCombos.length > 0 && (
                       <div className="border-t pt-6">
                         <h3 className="font-bold text-gray-900 mb-2 flex items-center gap-2">
                           <Target size={18} className="text-amber-500" />
-                          Similar Combinations ({quoteData.similarCombos.length})
+                          {quoteData.tier === 3 ? 'Similar Jobs Used for Estimate' : 'Similar Combinations'} ({quoteData.similarCombos.length})
                         </h3>
                         <p className="text-sm text-gray-500 mb-4">Based on parts overlap and labor cost analysis from Work Order History</p>
                         <div className="overflow-hidden rounded-lg border border-gray-200">
@@ -1278,110 +1471,22 @@ const App = () => {
               )}
             </div>
 
-            {/* Right Column - Data Overview */}
+            {/* Right Column - Reflexive Analytics */}
             <div className="space-y-6">
-              {/* Top Models */}
-              <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b bg-gray-50">
-                  <h3 className="font-bold text-gray-900">Top Models by Record Count</h3>
+              {(!selectedModel || (HAS_SERIAL_PREFIX && !selectedSerialPrefix)) ? (
+                <div className="bg-white rounded-xl shadow-sm p-8 text-center">
+                  <BarChart3 size={40} className="mx-auto text-gray-300 mb-3" />
+                  <h3 className="font-medium text-gray-500 mb-1">Service History Analytics</h3>
+                  <p className="text-sm text-gray-400">
+                    Select a model{HAS_SERIAL_PREFIX ? ' and serial prefix' : ''} to see the most frequent jobs performed from work order history.
+                  </p>
                 </div>
-                <div className="p-4 space-y-3">
-                  {(() => {
-                    const modelCounts: Record<string, number> = {};
-                    [STJ_DATA.jobs, WO_DATA.jobs].forEach(jobs => {
-                      Object.entries(jobs).forEach(([key, arr]) => {
-                        const model = key.split('|')[0];
-                        modelCounts[model] = (modelCounts[model] || 0) + arr.length;
-                      });
-                    });
-                    return Object.entries(modelCounts)
-                      .sort((a, b) => b[1] - a[1])
-                      .slice(0, 6)
-                      .map(([model, count], idx) => {
-                        const cat = categorizeModel(model);
-                        return (
-                          <div key={idx} className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span>{cat.image}</span>
-                              <span className="font-medium">{model}</span>
-                              <span className="text-xs text-gray-400">{cat.category}</span>
-                            </div>
-                            <span className="font-bold text-amber-600">{count}</span>
-                          </div>
-                        );
-                      });
-                  })()}
-                </div>
-              </div>
-
-              {/* Job Code Distribution */}
-              <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b bg-gray-50">
-                  <h3 className="font-bold text-gray-900">Job Codes</h3>
-                </div>
-                <div className="p-4 space-y-2">
-                  {(() => {
-                    const jcCounts: Record<string, number> = {};
-                    [STJ_DATA.jobs, WO_DATA.jobs].forEach(jobs => {
-                      Object.entries(jobs).forEach(([key, arr]) => {
-                        const parsed = parseKey(key);
-                        jcCounts[parsed.jobCode] = (jcCounts[parsed.jobCode] || 0) + arr.length;
-                      });
-                    });
-                    const maxCount = Math.max(...Object.values(jcCounts));
-                    return Object.entries(jcCounts)
-                      .sort((a, b) => b[1] - a[1])
-                      .slice(0, 8)
-                      .map(([code, count], idx) => {
-                        const desc = JOB_CODES.find(j => j.code === code)?.desc || code;
-                        return (
-                          <div key={idx}>
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm font-medium">{code} - {desc}</span>
-                              <span className="text-sm text-gray-500">{count.toLocaleString()}</span>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2">
-                              <div className="h-2 rounded-full bg-amber-500" style={{ width: `${(count / maxCount) * 100}%` }} />
-                            </div>
-                          </div>
-                        );
-                      });
-                  })()}
-                </div>
-              </div>
-
-              {/* Top Component Codes */}
-              <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b bg-gray-50">
-                  <h3 className="font-bold text-gray-900">Top Component Codes</h3>
-                </div>
-                <div className="divide-y divide-gray-100">
-                  {(() => {
-                    const ccCounts: Record<string, number> = {};
-                    [STJ_DATA.jobs, WO_DATA.jobs].forEach(jobs => {
-                      Object.entries(jobs).forEach(([key, arr]) => {
-                        const parsed = parseKey(key);
-                        ccCounts[parsed.compCode] = (ccCounts[parsed.compCode] || 0) + arr.length;
-                      });
-                    });
-                    return Object.entries(ccCounts)
-                      .sort((a, b) => b[1] - a[1])
-                      .slice(0, 8)
-                      .map(([code, count], idx) => {
-                        const desc = COMP_CODES.find(c => c.code === code)?.desc || code;
-                        return (
-                          <div key={idx} className="px-4 py-2 hover:bg-gray-50 flex justify-between items-center">
-                            <div>
-                              <div className="font-mono text-xs text-gray-500">{code}</div>
-                              <div className="text-sm font-medium">{desc}</div>
-                            </div>
-                            <span className="font-bold text-sm">{count.toLocaleString()}</span>
-                          </div>
-                        );
-                      });
-                  })()}
-                </div>
-              </div>
+              ) : (
+                <ReflexiveAnalytics
+                  selectedModel={selectedModel}
+                  selectedSerialPrefix={selectedSerialPrefix}
+                />
+              )}
             </div>
           </div>
         </div>

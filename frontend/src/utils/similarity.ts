@@ -29,6 +29,11 @@ export interface SimilarityInput {
   avgLabor: number;
   laborStdDev: number;
   parts: PartEntry[];
+  // Extended fields for Tier 3 pricing and similarity corroboration
+  avgMisc?: number;
+  avgParts?: number;
+  mostRecentDate?: string;  // "YYYY-MM" format
+  woCount?: number;
 }
 
 export interface SimilarityResult {
@@ -127,14 +132,17 @@ export function removeOutliers(values: number[]): number[] {
 export function aggregateParts(parts: PartEntry[]): PartEntry[] {
   const map = new Map<string, { qty: number; cost: number; price: number; cat: string; count: number }>();
   for (const p of parts) {
+    const qty = p.qty ?? 0;
+    const cost = p.cost ?? 0;
+    const price = p.price ?? 0;
     const existing = map.get(p.pn);
     if (existing) {
-      existing.qty += p.qty;
-      existing.cost += p.cost;
-      existing.price += p.price;
+      existing.qty += qty;
+      existing.cost += cost;
+      existing.price += price;
       existing.count++;
     } else {
-      map.set(p.pn, { qty: p.qty, cost: p.cost, price: p.price, cat: p.cat, count: 1 });
+      map.set(p.pn, { qty, cost, price, cat: p.cat, count: 1 });
     }
   }
   return [...map.entries()].map(([pn, v]) => ({
@@ -254,35 +262,84 @@ export function findSimilarCombos(
 }
 
 /**
- * Build a similarity index for all job keys that have parts data.
+ * Compute WO-derived stats (labor, misc, parts, dates) for a set of entries.
+ */
+function computeWoStats(woEntries: Array<{ l: number; m: number; p: number; dt?: string }>) {
+  let avgLabor = 0;
+  let laborStdDev = 0;
+  let avgMisc = 0;
+  let avgParts = 0;
+  let mostRecentDate: string | undefined;
+
+  const laborValues = removeOutliers(woEntries.map(e => e.l));
+  if (laborValues.length > 0) {
+    avgLabor = laborValues.reduce((a, b) => a + b, 0) / laborValues.length;
+    laborStdDev = Math.sqrt(
+      laborValues.map(x => (x - avgLabor) ** 2).reduce((a, b) => a + b, 0) / laborValues.length
+    );
+  }
+
+  const miscValues = removeOutliers(woEntries.map(e => e.m));
+  if (miscValues.length > 0) {
+    avgMisc = miscValues.reduce((a, b) => a + b, 0) / miscValues.length;
+  }
+
+  const partsValues = removeOutliers(woEntries.map(e => e.p));
+  if (partsValues.length > 0) {
+    avgParts = partsValues.reduce((a, b) => a + b, 0) / partsValues.length;
+  }
+
+  const dates = woEntries.map(e => e.dt).filter(Boolean) as string[];
+  if (dates.length > 0) {
+    mostRecentDate = dates.sort().reverse()[0];
+  }
+
+  return { avgLabor, laborStdDev, avgMisc, avgParts, mostRecentDate };
+}
+
+/**
+ * Build a similarity index for all job keys that have parts data OR work order data.
  * Returns a map of jobKey -> SimilarityInput for use with findSimilarCombos.
+ *
+ * WO-only combos (no partsData) get parts: [] — similarity will rely on
+ * labor proximity and labor variability dimensions only.
  */
 export function buildSimilarityIndex(
   partsIndex: PartsIndex,
-  woJobs: Record<string, Array<{ l: number }>>
+  woJobs: Record<string, Array<{ l: number; m: number; p: number; dt?: string }>>
 ): Map<string, SimilarityInput> {
   const index = new Map<string, SimilarityInput>();
 
+  // 1. Add all combos that have partsData (with or without WO)
   for (const [jobKey, parts] of Object.entries(partsIndex)) {
     const woEntries = woJobs[jobKey];
-    let avgLabor = 0;
-    let laborStdDev = 0;
-
     if (woEntries && woEntries.length > 0) {
-      const laborValues = removeOutliers(woEntries.map(e => e.l));
-      if (laborValues.length > 0) {
-        avgLabor = laborValues.reduce((a, b) => a + b, 0) / laborValues.length;
-        laborStdDev = Math.sqrt(
-          laborValues.map(x => (x - avgLabor) ** 2).reduce((a, b) => a + b, 0) / laborValues.length
-        );
-      }
+      const stats = computeWoStats(woEntries);
+      index.set(jobKey, {
+        jobKey, parts,
+        ...stats,
+        woCount: woEntries.length,
+      });
+    } else {
+      index.set(jobKey, {
+        jobKey, parts,
+        avgLabor: 0, laborStdDev: 0,
+        avgMisc: 0, avgParts: 0,
+        woCount: 0,
+      });
     }
+  }
 
+  // 2. Add WO-only combos (no partsData) — labor-only similarity
+  for (const [jobKey, woEntries] of Object.entries(woJobs)) {
+    if (index.has(jobKey)) continue; // Already added from partsIndex
+    if (woEntries.length === 0) continue;
+    const stats = computeWoStats(woEntries);
     index.set(jobKey, {
       jobKey,
-      avgLabor,
-      laborStdDev,
-      parts,
+      parts: [],
+      ...stats,
+      woCount: woEntries.length,
     });
   }
 

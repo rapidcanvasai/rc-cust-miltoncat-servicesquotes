@@ -6,8 +6,10 @@
 *.msg
 *.mp4
 *.mp3
+*.xlsx
 video/
-Service Call Job and Component Code.xlsx
+/data/
+frontend_2/
 
 # Node
 node_modules/

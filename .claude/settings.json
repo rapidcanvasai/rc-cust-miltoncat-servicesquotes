@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/lucasinaciodaluz/projects/miltoncat/usecases/servicesquotes remote -v)",
+      "Bash(git -C /Users/lucasinaciodaluz/projects/miltoncat/usecases/servicesquotes remote set-url origin https://github.com/rapidcanvasai/rc-cust-miltoncat-servicesquotes.git)",
+      "Bash(git -C /Users/lucasinaciodaluz/projects/miltoncat/usecases/servicesquotes status --short)",
+      "Bash(git push:*)",
+      "Bash(git -C /Users/lucasinaciodaluz/projects/miltoncat/usecases/servicesquotes ls-files)",
+      "Bash(xargs -I{} git -C /Users/lucasinaciodaluz/projects/miltoncat/usecases/servicesquotes ls-tree -l HEAD -- {})",
+      "Bash(sort -k4 -n -r)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(bash /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes/infra/deploy-frontend.sh)"
+    ],
+    "additionalDirectories": [
+      "/Users/lucasinaciodaluz/projects/miltoncat/usecases"
+    ]
+  }
+}
