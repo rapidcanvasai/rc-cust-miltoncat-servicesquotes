@@ -11,7 +11,21 @@
       "Bash(git rm:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(bash /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes/infra/deploy-frontend.sh)"
+      "Bash(bash /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes/infra/deploy-frontend.sh)",
+      "Read(//Users/lucasinaciodaluz/projects/miltoncat/**)",
+      "Bash(python3 -c \"import openpyxl; wb = openpyxl.load_workbook\\(''/Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes/data/additional_parts_data/Milton Parts On Service Calls Oct 1 2025 thru Oct 31 2025.xlsx''\\); print\\(''Sheet names:'', wb.sheetnames\\); print\\(''First sheet:'', wb.sheetnames[0]\\); ws = wb[wb.sheetnames[0]]; row1 = list\\(ws.iter_rows\\(min_row=1, max_row=1, values_only=True\\)\\)[0]; print\\(''Headers:'', row1[:20]\\)\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3:*)",
+      "Bash(find /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes -name *.json -type f)",
+      "Bash(grep -r \"Project ID\\\\|Project date\\\\|additional_parts\\\\|partsData\\\\|CSR\" /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes --include=*.py --include=*.md --include=*.ts)",
+      "Bash(grep -r \"Project ID\\\\|segment_id\\\\|combo_key\\\\|partsData.*join\\\\|generate.*parts\" /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes --include=*.md)",
+      "Bash(ls /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes/data/*.json)",
+      "Bash(python scripts/transform_parts.py)",
+      "Bash(ls -lh /Users/lucasinaciodaluz/projects/miltoncat/usecases/rc-cust-miltoncat-servicesquotes/frontend/src/data/*.json)",
+      "Bash(node --max-old-space-size=8192 node_modules/vite/bin/vite.js build)",
+      "Bash(npm install:*)",
+      "Bash(bash infra/deploy-frontend.sh dev)",
+      "Bash(npm run:*)"
     ],
     "additionalDirectories": [
       "/Users/lucasinaciodaluz/projects/miltoncat/usecases"
