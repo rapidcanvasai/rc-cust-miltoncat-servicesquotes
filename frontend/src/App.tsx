@@ -262,9 +262,14 @@ function normalizePartsKeys(data: PartsIndex): PartsIndex {
   return normalized;
 }
 
+// Feature flag: set to true to re-enable similarity scoring in the UI
+const ENABLE_SIMILARITY = false;
+
 // Build similarity index from parts data joined with work orders
 const PARTS_DATA = normalizePartsKeys(partsIndex as PartsIndex);
-const SIMILARITY_INDEX = buildSimilarityIndex(PARTS_DATA, WO_DATA.jobs as Record<string, Array<{ l: number; m: number; p: number; dt?: string }>>);
+const SIMILARITY_INDEX = ENABLE_SIMILARITY
+  ? buildSimilarityIndex(PARTS_DATA, WO_DATA.jobs as Record<string, Array<{ l: number; m: number; p: number; dt?: string }>>)
+  : new Map();
 
 const TOTAL_STJS = Object.values(STJ_DATA.jobs).reduce((sum, arr) => sum + arr.length, 0);
 const TOTAL_WOS = Object.values(WO_DATA.jobs).reduce((sum, arr) => sum + arr.length, 0);
@@ -723,7 +728,7 @@ const App = () => {
                     <div className="mt-1 space-y-0.5 opacity-75">
                       <div>Base (count): {quoteData.confidenceBreakdown.baseScore}</div>
                       <div>CV adjustment: {quoteData.confidenceBreakdown.cvAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.cvAdjustment}</div>
-                      <div>Similarity: {quoteData.confidenceBreakdown.similarityAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.similarityAdjustment}</div>
+                      {ENABLE_SIMILARITY && <div>Similarity: {quoteData.confidenceBreakdown.similarityAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.similarityAdjustment}</div>}
                     </div>
                   </details>
                 )}
@@ -816,7 +821,7 @@ const App = () => {
           )}
 
           {/* Similarity Matches */}
-          {quoteData.similarCombos && quoteData.similarCombos.length > 0 && (
+          {ENABLE_SIMILARITY && quoteData.similarCombos && quoteData.similarCombos.length > 0 && (
             <div className="bg-white rounded-xl p-4 shadow-sm">
               <h3 className="font-bold text-gray-900 mb-1 flex items-center gap-2">
                 <Target size={18} className="text-amber-500" />
@@ -1368,7 +1373,7 @@ const App = () => {
                         <div className="flex gap-6">
                           <span>Base (count): {quoteData.confidenceBreakdown.baseScore}</span>
                           <span>CV adjustment: {quoteData.confidenceBreakdown.cvAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.cvAdjustment}</span>
-                          <span>Similarity: {quoteData.confidenceBreakdown.similarityAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.similarityAdjustment}</span>
+                          {ENABLE_SIMILARITY && <span>Similarity: {quoteData.confidenceBreakdown.similarityAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.similarityAdjustment}</span>}
                           <span className="font-medium text-gray-900">= {quoteData.confidenceScore}%</span>
                         </div>
                       </div>
@@ -1419,7 +1424,7 @@ const App = () => {
                     )}
 
                     {/* Similarity Matches - Desktop */}
-                    {quoteData.similarCombos && quoteData.similarCombos.length > 0 && (
+                    {ENABLE_SIMILARITY && quoteData.similarCombos && quoteData.similarCombos.length > 0 && (
                       <div className="border-t pt-6">
                         <h3 className="font-bold text-gray-900 mb-2 flex items-center gap-2">
                           <Target size={18} className="text-amber-500" />
