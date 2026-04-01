@@ -15,8 +15,10 @@ cd frontend && npm run build    # Production build
 cd frontend && npm run lint     # ESLint
 cd frontend && npm run preview  # Preview production build
 
-# Deploy frontend to RapidCanvas
-bash infra/deploy-frontend.sh   # Requires RAPIDCANVAS_API_KEY in .env
+# Deploy frontend to RapidCanvas (requires RAPIDCANVAS_API_KEY in .env)
+bash infra/deploy-frontend.sh          # Deploy to dev (default)
+bash infra/deploy-frontend.sh dev      # Deploy to dev (explicit)
+bash infra/deploy-frontend.sh prod     # Deploy to production
 
 # Data transformation (Python)
 python scripts/transform_standardjobs.py
@@ -56,7 +58,7 @@ App runs inside RapidCanvas iframe. Auth flow: `Providers` → `RCAuthProvider` 
 
 ### Infrastructure
 
-Deploy scripts in `infra/` interact with RapidCanvas API (signed URL upload, app template rebuild, dataapp launch). Config in `infra/.rapidcanvas` maps DataApp and FastAPI IDs. Backend (FastAPI) is optional for frontend-only deploys.
+Deploy scripts in `infra/` interact with RapidCanvas API (signed URL upload, app template rebuild, dataapp launch). Environment-specific config files in `infra/.rapidcanvas.{dev,prod}` map DataApp and FastAPI IDs per environment. Default environment is `dev`. Backend (FastAPI) is optional for frontend-only deploys.
 
 ## Tech Stack
 

@@ -1,0 +1,10 @@
+# RapidCanvas Configuration - DEV
+
+# Backend (FastAPI)
+backendPath=backend
+FASTAPI_ID=
+API_PREFIX=
+
+# Frontend (DataApp)
+dashboardPath=frontend
+DATAAPP_ID=cc3403a8-0cec-4638-bd16-3a2730cf16fb

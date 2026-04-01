@@ -36,14 +36,28 @@ Excel (data/)  →  Python scripts (scripts/)  →  JSON (frontend/src/data/)  �
 
 ## Deploy
 
-O frontend é deployado na plataforma RapidCanvas:
+O frontend é deployado na plataforma RapidCanvas com suporte a ambientes **dev** e **prod**:
 
 ```bash
 # Requer RAPIDCANVAS_API_KEY no .env da raiz
-bash infra/deploy-frontend.sh
+
+bash infra/deploy-frontend.sh          # Deploy para dev (default)
+bash infra/deploy-frontend.sh dev      # Deploy para dev (explícito)
+bash infra/deploy-frontend.sh prod     # Deploy para produção
 ```
 
 O script faz upload do zip, atualiza o app template e relança o DataApp automaticamente.
+
+### Configuração por Ambiente
+
+Cada ambiente tem seu próprio arquivo de configuração em `infra/`:
+
+| Arquivo | Ambiente | DataApp ID |
+|---------|----------|------------|
+| `.rapidcanvas.dev` | Desenvolvimento | `cc3403a8-0cec-4638-bd16-3a2730cf16fb` |
+| `.rapidcanvas.prod` | Produção | `6e736bdf-68fd-43ab-ac00-e078fb205a76` |
+
+O script seleciona automaticamente o arquivo correto com base no argumento passado. O `vite.config.ts` é atualizado com o slug do DataApp correspondente durante o deploy.
 
 ## Tech Stack
 

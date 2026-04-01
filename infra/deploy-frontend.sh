@@ -1,9 +1,17 @@
 #!/bin/bash
 # RapidCanvas Frontend Deploy Script
+# Usage: bash infra/deploy-frontend.sh [dev|prod]  (default: dev)
 set +e
 
+DEPLOY_ENV="${1:-dev}"
+
+if [[ "$DEPLOY_ENV" != "dev" && "$DEPLOY_ENV" != "prod" ]]; then
+  echo "[ERROR] Invalid environment: $DEPLOY_ENV (must be 'dev' or 'prod')"
+  exit 1
+fi
+
 echo "=========================================="
-echo "RapidCanvas Frontend Deploy Script"
+echo "RapidCanvas Frontend Deploy Script [$DEPLOY_ENV]"
 echo "=========================================="
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,12 +68,14 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
   export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
 fi
 
-# Read config from .rapidcanvas
-CONFIG_FILE="$SCRIPT_DIR/.rapidcanvas"
+# Read config from environment-specific .rapidcanvas file
+CONFIG_FILE="$SCRIPT_DIR/.rapidcanvas.$DEPLOY_ENV"
 if [ ! -f "$CONFIG_FILE" ]; then
-  echo "[ERROR] .rapidcanvas config file not found at $CONFIG_FILE"
+  echo "[ERROR] Config file not found: $CONFIG_FILE"
+  echo "[HINT] Expected .rapidcanvas.dev or .rapidcanvas.prod in infra/"
   exit 1
 fi
+echo "[INFO] Using config: $CONFIG_FILE"
 
 DATAAPP_ID=$(grep "^DATAAPP_ID=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ')
 FASTAPI_ID=$(grep "^FASTAPI_ID=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ')
