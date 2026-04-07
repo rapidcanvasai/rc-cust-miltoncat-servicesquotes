@@ -1,12 +1,13 @@
 // @ts-nocheck
 import React, { useState, useMemo } from 'react';
-import { Search, Clock, Wrench, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Smartphone, Monitor, BarChart3, Package, History, Zap, Target, AlertCircle, X, RefreshCw, Download, Share2 } from 'lucide-react';
+import { Search, Clock, Wrench, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Smartphone, Monitor, BarChart3, Package, History, Zap, Target, AlertCircle, X, RefreshCw, Download, Share2, Plus, Trash2, Wifi, WifiOff, Upload } from 'lucide-react';
 import rawStjData from './data/standardJobs.json';
 import rawWoData from './data/workOrders.json';
 import partsIndex from './data/partsData.json';
 import { getBaseModel, buildModelGroups } from './utils/modelGrouping';
 import { buildSimilarityIndex, findSimilarCombos, type SimilarityResult, type PartsIndex } from './utils/similarity';
 import { generateQuoteResult, type QuoteResult, type WoEntry } from './utils/quoteEngine';
+import DistributionCharts from './components/DistributionCharts';
 
 // ============================================
 // TYPES & DATA LOADING
@@ -293,6 +294,9 @@ const App = () => {
   const [selectedJobCode, setSelectedJobCode] = useState<any>(null);
   const [selectedCompCode, setSelectedCompCode] = useState<any>(null);
 
+  // Multi-line quoting: accumulated segments
+  const [quoteSegments, setQuoteSegments] = useState<any[]>([]);
+
   const [modelSearch, setModelSearch] = useState('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
 
@@ -416,7 +420,115 @@ const App = () => {
     setSelectedSerialPrefix(null);
     setSelectedJobCode(null);
     setSelectedCompCode(null);
+    setQuoteSegments([]);
   };
+
+  const addToQuote = () => {
+    if (!quoteData || quoteData.insufficientData) return;
+    setQuoteSegments(prev => [...prev, { ...quoteData }]);
+    // Reset job/component for next segment, keep model/serial
+    setShowQuoteResult(false);
+    setQuoteData(null);
+    setSelectedJobCode(null);
+    setSelectedCompCode(null);
+  };
+
+  const removeSegment = (idx: number) => {
+    setQuoteSegments(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const clearQuoteBuilder = () => {
+    setQuoteSegments([]);
+  };
+
+  const quoteBundleTotal = useMemo(() => {
+    if (quoteSegments.length === 0) return null;
+    return {
+      parts: quoteSegments.reduce((s, seg) => s + (seg.avgParts || 0), 0),
+      labor: quoteSegments.reduce((s, seg) => s + (seg.avgLabor || 0), 0),
+      misc: quoteSegments.reduce((s, seg) => s + (seg.avgMisc || 0), 0),
+      total: quoteSegments.reduce((s, seg) => s + (seg.avgTotal || 0), 0),
+      duration: quoteSegments.reduce((s, seg) => s + (seg.avgDuration || 0), 0),
+    };
+  }, [quoteSegments]);
+
+  // ============================================
+  // SYNC FUNCTIONALITY (placeholder)
+  // ============================================
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [syncQueue, setSyncQueue] = useState<any[]>([]);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(new Date());
+  const [showSyncNotification, setShowSyncNotification] = useState(false);
+
+  // Listen for online/offline events
+  React.useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      // When back online, attempt to sync queued quotes
+      if (syncQueue.length > 0) {
+        setShowSyncNotification(true);
+        // Placeholder: in production, this would push to AX
+        setTimeout(() => {
+          setLastSyncTime(new Date());
+          setSyncQueue([]);
+          setTimeout(() => setShowSyncNotification(false), 3000);
+        }, 1500);
+      }
+    };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncQueue]);
+
+  const pushToAx = () => {
+    if (quoteSegments.length === 0) return;
+    const bundle = {
+      model: quoteSegments[0].model,
+      serialPrefix: quoteSegments[0].serialPrefix,
+      segments: quoteSegments,
+      bundleTotal: quoteBundleTotal,
+      createdAt: new Date().toISOString(),
+    };
+    if (isOnline) {
+      // Placeholder: would push to AX API here
+      setShowSyncNotification(true);
+      setTimeout(() => {
+        setLastSyncTime(new Date());
+        setQuoteSegments([]);
+        setTimeout(() => setShowSyncNotification(false), 3000);
+      }, 1500);
+    } else {
+      // Queue for sync when back online
+      setSyncQueue(prev => [...prev, bundle]);
+      setQuoteSegments([]);
+    }
+  };
+
+  const SyncStatusBadge = ({ compact = false }: { compact?: boolean }) => (
+    <div className={`flex items-center gap-1.5 ${compact ? 'text-xs' : 'text-sm'}`}>
+      {isOnline ? (
+        <>
+          <Wifi size={compact ? 14 : 16} className="text-green-400" />
+          {!compact && <span className="text-green-400">Synced</span>}
+          {syncQueue.length > 0 && (
+            <span className="bg-amber-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">{syncQueue.length}</span>
+          )}
+        </>
+      ) : (
+        <>
+          <WifiOff size={compact ? 14 : 16} className="text-amber-400" />
+          {!compact && <span className="text-amber-400">Offline</span>}
+          {syncQueue.length > 0 && (
+            <span className="bg-amber-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">{syncQueue.length} pending</span>
+          )}
+        </>
+      )}
+    </div>
+  );
 
   const getConfidenceColor = (conf: string) => {
     if (conf === 'HIGH') return 'text-green-600 bg-green-100 border-green-300';
@@ -438,12 +550,29 @@ const App = () => {
               <p className="text-xs text-amber-100">Quick Quote</p>
             </div>
           </div>
-          <div className="text-right text-xs">
-            <div className="font-medium">Mike Smith, PSSR</div>
-            <div className="text-amber-200">Standard Job Lookup</div>
+          <div className="flex items-center gap-3">
+            <SyncStatusBadge compact />
+            <div className="text-right text-xs">
+              <div className="font-medium">Mike Smith, PSSR</div>
+              <div className="text-amber-200">Standard Job Lookup</div>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Sync Notification Banner */}
+      {showSyncNotification && (
+        <div className="bg-green-500 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-medium">
+          <Upload size={16} className="animate-pulse" />
+          {syncQueue.length > 0 ? `Syncing ${syncQueue.length} quote(s)...` : 'Quote synced successfully!'}
+        </div>
+      )}
+      {!isOnline && syncQueue.length > 0 && !showSyncNotification && (
+        <div className="bg-amber-500 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-medium">
+          <WifiOff size={16} />
+          {syncQueue.length} quote{syncQueue.length > 1 ? 's' : ''} pending — will sync when connected
+        </div>
+      )}
 
       {!showQuoteResult ? (
         <div className="p-4 space-y-4">
@@ -787,6 +916,15 @@ const App = () => {
             </div>
           </div>
 
+          {/* Distribution Charts */}
+          {quoteData.entries && quoteData.entries.length > 1 && (
+            <DistributionCharts
+              entries={quoteData.entries}
+              avgDuration={quoteData.avgDuration}
+              avgParts={quoteData.avgParts}
+            />
+          )}
+
           {/* Standard Jobs / Work Orders List */}
           {quoteData.entries && quoteData.entries.length > 0 && (
           <div className="bg-white rounded-xl p-4 shadow-sm">
@@ -872,26 +1010,83 @@ const App = () => {
 
           {/* Action Buttons */}
           <div className="space-y-2">
-            <button className="w-full p-4 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl font-bold flex items-center justify-center gap-2">
-              <Send size={20} />
-              Send to AX as Quote
+            <button
+              onClick={addToQuote}
+              className="w-full p-4 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl font-bold flex items-center justify-center gap-2"
+            >
+              <Plus size={20} />
+              Add to Quote
             </button>
-            <div className="grid grid-cols-2 gap-2">
-              <button className="p-3 bg-white border border-gray-200 rounded-xl font-medium flex items-center justify-center gap-2">
-                <Share2 size={18} />
-                Share
-              </button>
-              <button className="p-3 bg-white border border-gray-200 rounded-xl font-medium flex items-center justify-center gap-2">
-                <Download size={18} />
-                PDF
-              </button>
-            </div>
+            <button className="w-full p-3 bg-white border border-gray-200 rounded-xl font-medium flex items-center justify-center gap-2">
+              <Download size={18} />
+              Export PDF
+            </button>
             <button onClick={resetQuote} className="w-full p-3 text-gray-600 font-medium">
               ← New Quote
             </button>
           </div>
           </>
           )}
+        </div>
+      )}
+
+      {/* Quote Builder - Accumulated Segments */}
+      {quoteSegments.length > 0 && (
+        <div className="p-4">
+          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+            <div className="bg-gradient-to-r from-gray-900 to-gray-800 px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText size={18} className="text-amber-400" />
+                <span className="text-white font-bold">Quote Builder</span>
+                <span className="text-gray-400 text-sm">— {quoteSegments[0].model.id}{quoteSegments[0].serialPrefix ? ` [${quoteSegments[0].serialPrefix}]` : ''}</span>
+              </div>
+              <span className="text-amber-400 text-sm font-medium">{quoteSegments.length} item{quoteSegments.length > 1 ? 's' : ''}</span>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {quoteSegments.map((seg, idx) => (
+                <div key={idx} className="p-3 flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="font-medium text-sm text-gray-900">
+                      #{idx + 1} {seg.jobCode.code}/{seg.compCode.code} — {seg.jobCode.desc}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {seg.compCode.desc} • Tier {seg.tier} • {seg.confidence}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Parts ${seg.avgParts.toLocaleString()} + Labor ${seg.avgLabor.toLocaleString()} + Misc ${seg.avgMisc.toLocaleString()} = <span className="font-bold">${seg.avgTotal.toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <button onClick={() => removeSegment(idx)} className="p-2 text-gray-400 hover:text-red-500">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {quoteBundleTotal && (
+              <div className="bg-gray-50 px-4 py-3 border-t">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="font-bold text-gray-900">Bundle Total</span>
+                  <span className="text-xl font-bold text-amber-600">${quoteBundleTotal.total.toLocaleString()}</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-3">
+                  Parts ${quoteBundleTotal.parts.toLocaleString()} • Labor ${quoteBundleTotal.labor.toLocaleString()} • Misc ${quoteBundleTotal.misc.toLocaleString()} • {quoteBundleTotal.duration} hrs
+                </div>
+                <div className="space-y-2">
+                  <button onClick={pushToAx} className="w-full p-3 bg-green-600 text-white rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-green-700">
+                    <Send size={18} />
+                    {isOnline ? 'Push Bundle to AX' : 'Queue for Sync'}
+                  </button>
+                  <button className="w-full p-2 border border-gray-300 rounded-lg font-medium flex items-center justify-center gap-2 text-sm hover:bg-gray-50">
+                    <Download size={16} />
+                    Export PDF
+                  </button>
+                  <button onClick={clearQuoteBuilder} className="w-full p-2 text-gray-500 text-sm">
+                    Clear All
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -1078,6 +1273,7 @@ const App = () => {
                 </div>
               </div>
               <div className="flex items-center gap-6">
+                <SyncStatusBadge />
                 <div className="text-right">
                   <div className="text-white font-medium">Tim Dailey</div>
                   <div className="text-gray-400 text-sm">Service Operations</div>
@@ -1086,6 +1282,20 @@ const App = () => {
             </div>
           </div>
         </div>
+
+        {/* Sync Notification Banner - Desktop */}
+        {showSyncNotification && (
+          <div className="bg-green-500 text-white px-6 py-2 flex items-center justify-center gap-2 text-sm font-medium">
+            <Upload size={16} className="animate-pulse" />
+            {syncQueue.length > 0 ? `Syncing ${syncQueue.length} quote(s)...` : 'Quote synced successfully!'}
+          </div>
+        )}
+        {!isOnline && syncQueue.length > 0 && !showSyncNotification && (
+          <div className="bg-amber-500 text-white px-6 py-2 flex items-center justify-center gap-2 text-sm font-medium">
+            <WifiOff size={16} />
+            {syncQueue.length} quote{syncQueue.length > 1 ? 's' : ''} pending sync — will push when connected
+          </div>
+        )}
 
         <div className="max-w-7xl mx-auto px-6 py-6">
           <div className="grid grid-cols-3 gap-6">
@@ -1340,8 +1550,11 @@ const App = () => {
                           </div>
                         </div>
                         <div className="mt-4 space-y-2">
-                          <button className="w-full p-3 bg-green-600 text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-green-700">
-                            <Send size={18} /> Push to AX
+                          <button
+                            onClick={addToQuote}
+                            className="w-full p-3 bg-amber-500 text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-amber-600"
+                          >
+                            <Plus size={18} /> Add to Quote
                           </button>
                           <button className="w-full p-3 border border-gray-300 rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-gray-50">
                             <Download size={18} /> Export PDF
@@ -1376,6 +1589,17 @@ const App = () => {
                           {ENABLE_SIMILARITY && <span>Similarity: {quoteData.confidenceBreakdown.similarityAdjustment >= 0 ? '+' : ''}{quoteData.confidenceBreakdown.similarityAdjustment}</span>}
                           <span className="font-medium text-gray-900">= {quoteData.confidenceScore}%</span>
                         </div>
+                      </div>
+                    )}
+
+                    {/* Distribution Charts */}
+                    {quoteData.entries && quoteData.entries.length > 1 && (
+                      <div className="border-t pt-6">
+                        <DistributionCharts
+                          entries={quoteData.entries}
+                          avgDuration={quoteData.avgDuration}
+                          avgParts={quoteData.avgParts}
+                        />
                       </div>
                     )}
 
@@ -1471,6 +1695,90 @@ const App = () => {
                         </div>
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Quote Builder - Desktop */}
+              {quoteSegments.length > 0 && (
+                <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                  <div className="bg-gradient-to-r from-gray-900 to-gray-800 px-6 py-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <FileText size={20} className="text-amber-400" />
+                      <span className="text-white font-bold text-lg">Quote Builder</span>
+                      <span className="text-gray-400">— {quoteSegments[0].model.id}{quoteSegments[0].serialPrefix ? ` [${quoteSegments[0].serialPrefix}]` : ''}</span>
+                    </div>
+                    <span className="text-amber-400 font-medium">{quoteSegments.length} segment{quoteSegments.length > 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-600">#</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-600">Job / Component</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-600">Tier</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-600">Parts</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-600">Labor</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-600">Misc</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-600">Total</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-600">Hours</th>
+                          <th className="px-4 py-3"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {quoteSegments.map((seg, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-gray-400">{idx + 1}</td>
+                            <td className="px-4 py-3">
+                              <div className="font-medium text-gray-900">{seg.jobCode.code} — {seg.jobCode.desc}</div>
+                              <div className="text-xs text-gray-500">{seg.compCode.code} — {seg.compCode.desc}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">T{seg.tier}</span>
+                              <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${seg.confidence === 'HIGH' ? 'text-green-600 bg-green-50' : seg.confidence === 'MEDIUM' ? 'text-yellow-600 bg-yellow-50' : 'text-red-600 bg-red-50'}`}>
+                                {seg.confidenceScore}%
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right">${seg.avgParts.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right">${seg.avgLabor.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right">${seg.avgMisc.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-bold">${seg.avgTotal.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right">{seg.avgDuration}</td>
+                            <td className="px-4 py-3 text-right">
+                              <button onClick={() => removeSegment(idx)} className="text-gray-400 hover:text-red-500">
+                                <Trash2 size={16} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      {quoteBundleTotal && (
+                        <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+                          <tr>
+                            <td className="px-4 py-3"></td>
+                            <td className="px-4 py-3 font-bold text-gray-900">Bundle Total</td>
+                            <td className="px-4 py-3"></td>
+                            <td className="px-4 py-3 text-right font-bold">${quoteBundleTotal.parts.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-bold">${quoteBundleTotal.labor.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-bold">${quoteBundleTotal.misc.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-bold text-lg text-amber-600">${quoteBundleTotal.total.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-bold">{quoteBundleTotal.duration}</td>
+                            <td className="px-4 py-3"></td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                  <div className="px-6 py-4 bg-gray-50 border-t flex items-center gap-3">
+                    <button onClick={pushToAx} className="px-6 py-3 bg-green-600 text-white rounded-lg font-bold flex items-center gap-2 hover:bg-green-700">
+                      <Send size={18} /> {isOnline ? 'Push Bundle to AX' : 'Queue for Sync'}
+                    </button>
+                    <button className="px-6 py-3 border border-gray-300 rounded-lg font-medium flex items-center gap-2 hover:bg-gray-50">
+                      <Download size={18} /> Export PDF
+                    </button>
+                    <button onClick={clearQuoteBuilder} className="px-4 py-3 text-gray-500 text-sm hover:text-gray-700">
+                      Clear All
+                    </button>
                   </div>
                 </div>
               )}

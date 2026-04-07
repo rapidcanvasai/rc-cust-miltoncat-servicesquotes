@@ -16,6 +16,11 @@ const useTokenValidation = (): UseQueryResult<string, unknown> => {
         throw "No token found";
       }
 
+      if (import.meta.env.VITE_SKIP_AUTH === "true") {
+        console.log("✅ Skipping token validation (VITE_SKIP_AUTH=true)");
+        return "Admin";
+      }
+
       try {
         const { data } = await api.validateToken({
           token,

@@ -12,6 +12,12 @@ const withToken = (
 
     useEffect(() => {
       const initializeApi = async () => {
+        if (import.meta.env.VITE_SKIP_AUTH === "true") {
+          console.log("✅ Skipping API init (VITE_SKIP_AUTH=true)");
+          setIsInitialized(true);
+          return;
+        }
+
         try {
           console.log("🔄 Starting API initialization...");
           await api.init();

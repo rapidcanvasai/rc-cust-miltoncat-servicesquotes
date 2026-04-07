@@ -21,6 +21,19 @@ const useDataAppBySlug = (): UseQueryResult<IDataAppDetails, unknown> => {
     staleTime: Infinity,
     queryKey: [QUERY_KEY_DATAAPP_BY_SLUG],
     queryFn: async () => {
+      if (import.meta.env.VITE_SKIP_AUTH === "true") {
+        console.log("✅ Skipping DataApp slug fetch (VITE_SKIP_AUTH=true)");
+        return {
+          projectId: import.meta.env.VITE_PROJECT_ID || "local-dev",
+          tenantId: "local-dev",
+          scenarioId: "local-dev",
+          dataAppId: import.meta.env.VITE_DATAAPP_ID || "local-dev",
+          askAIConfig: {} as DataappAskAIConfig,
+          newAskAIFlow: false,
+          linksMap: {} as { string: string },
+        };
+      }
+
       const slug = await getSlug();
 
       if (!slug) {
