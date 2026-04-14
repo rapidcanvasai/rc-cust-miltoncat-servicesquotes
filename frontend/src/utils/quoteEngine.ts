@@ -381,6 +381,9 @@ function computeTier3Quote(
   woJobs: Record<string, WoEntry[]>,
   now: Date
 ): QuoteResult | null {
+  // Early exit: no candidates to compare against when similarity is disabled
+  if (similarityIndex.size === 0) return null;
+
   // Find the input for this combo in the similarity index
   let input: SimilarityInput | undefined;
   let inputKey = '';
@@ -555,6 +558,8 @@ function computeSimilarityCorroboration(
   comboKeys: string[],
   woEntries?: WoEntry[]
 ): number {
+  if (similarityIndex.size === 0) return 0;
+
   const similarCombos = getSimilarCombosForCorroboration(similarityIndex, comboKeys, woEntries);
 
   // Need 3+ combos with score > 70
@@ -644,6 +649,8 @@ function getSimilarCombosForDisplay(
   comboKeys: string[],
   woEntries?: WoEntry[]
 ): SimilarityResult[] {
+  if (similarityIndex.size === 0) return [];
+
   const input = resolveInput(similarityIndex, comboKeys, woEntries);
   if (!input) return [];
 

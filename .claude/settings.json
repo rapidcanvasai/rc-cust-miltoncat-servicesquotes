@@ -25,7 +25,19 @@
       "Bash(node --max-old-space-size=8192 node_modules/vite/bin/vite.js build)",
       "Bash(npm install:*)",
       "Bash(bash infra/deploy-frontend.sh dev)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(bash infra/deploy-frontend.sh prod)",
+      "Bash(ls .env*)",
+      "Bash(ls -la *.json)",
+      "Bash(node -e ':*)",
+      "Bash(npx tsc:*)",
+      "WebSearch",
+      "Bash(node scripts/analyze-confidence.mjs)",
+      "Bash(node scripts/simulate-formulas.mjs)",
+      "Bash(node scripts/simulate-thresholds.mjs)",
+      "Bash(node scripts/scorecard.mjs)",
+      "Bash(node scripts/simulate-10yr.mjs)",
+      "Bash(node scripts/simulate-skeptical.mjs)"
     ],
     "additionalDirectories": [
       "/Users/lucasinaciodaluz/projects/miltoncat/usecases"

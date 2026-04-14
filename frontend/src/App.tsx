@@ -297,6 +297,11 @@ const App = () => {
   // Multi-line quoting: accumulated segments
   const [quoteSegments, setQuoteSegments] = useState<any[]>([]);
 
+  // Price-adjustment selector: -10% (low), 0 (recommended/generated), +10% (high)
+  // Per Tim Dailey (4/10/2026): tool now offers ±10% optionality off the generated
+  // quote instead of historical low/high (which can be misleading outliers).
+  const [priceAdjustment, setPriceAdjustment] = useState<-10 | 0 | 10>(0);
+
   const [modelSearch, setModelSearch] = useState('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
 
@@ -365,6 +370,7 @@ const App = () => {
   const generateQuote = () => {
     if (!selectedModel || !selectedJobCode || !selectedCompCode) return;
     if (HAS_SERIAL_PREFIX && !selectedSerialPrefix) return;
+    setPriceAdjustment(0);
     setIsGenerating(true);
     setTimeout(() => {
       const group = MODEL_GROUPS.get(selectedModel.id);
@@ -421,16 +427,33 @@ const App = () => {
     setSelectedJobCode(null);
     setSelectedCompCode(null);
     setQuoteSegments([]);
+    setPriceAdjustment(0);
+  };
+
+  // Apply ±10% adjustment proportionally across parts/labor/misc.
+  // Returns the same shape as quoteData with adjusted values.
+  const getAdjustedQuote = (q: any, pct: number) => {
+    if (!q) return q;
+    const factor = 1 + pct / 100;
+    return {
+      avgParts: Math.round((q.avgParts || 0) * factor),
+      avgLabor: Math.round((q.avgLabor || 0) * factor),
+      avgMisc: Math.round((q.avgMisc || 0) * factor),
+      avgTotal: Math.round((q.avgTotal || 0) * factor),
+      adjustmentPct: pct,
+    };
   };
 
   const addToQuote = () => {
     if (!quoteData || quoteData.insufficientData) return;
-    setQuoteSegments(prev => [...prev, { ...quoteData }]);
+    const adjusted = getAdjustedQuote(quoteData, priceAdjustment);
+    setQuoteSegments(prev => [...prev, { ...quoteData, ...adjusted }]);
     // Reset job/component for next segment, keep model/serial
     setShowQuoteResult(false);
     setQuoteData(null);
     setSelectedJobCode(null);
     setSelectedCompCode(null);
+    setPriceAdjustment(0);
   };
 
   const removeSegment = (idx: number) => {
@@ -803,31 +826,45 @@ const App = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4 mb-4">
-              <div className="text-center">
-                <div className="text-xs text-gray-400">LOW</div>
-                <div className="text-lg font-bold text-gray-400">${quoteData.lowTotal.toLocaleString()}</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xs text-amber-400">AVERAGE</div>
-                <div className="text-3xl font-bold text-amber-400">${quoteData.avgTotal.toLocaleString()}</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xs text-gray-400">HIGH</div>
-                <div className="text-lg font-bold text-gray-400">${quoteData.highTotal.toLocaleString()}</div>
-              </div>
+            {/* Price-adjustment selector: -10% / Recommended / +10% */}
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {[-10, 0, 10].map(pct => {
+                const adj = getAdjustedQuote(quoteData, pct);
+                const isActive = priceAdjustment === pct;
+                const label = pct === 0 ? 'RECOMMENDED' : pct < 0 ? `${pct}%` : `+${pct}%`;
+                return (
+                  <button
+                    key={pct}
+                    type="button"
+                    onClick={() => setPriceAdjustment(pct as -10 | 0 | 10)}
+                    className={`text-center rounded-lg px-2 py-2 transition ${
+                      isActive
+                        ? 'bg-amber-500/20 border-2 border-amber-400'
+                        : 'bg-gray-800/50 border-2 border-transparent hover:border-gray-600'
+                    }`}
+                  >
+                    <div className={`text-[10px] font-medium ${isActive ? 'text-amber-300' : 'text-gray-400'}`}>{label}</div>
+                    <div className={`font-bold ${isActive ? 'text-2xl text-amber-300' : 'text-base text-gray-300'}`}>
+                      ${adj.avgTotal.toLocaleString()}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-gray-700">
+            <div className="flex items-center justify-between pt-4 border-t border-gray-700 text-xs">
               <div className="flex items-center gap-2">
-                <Clock size={16} className="text-gray-400" />
-                <span className="text-gray-400">{quoteData.avgDuration} hrs avg</span>
+                <Clock size={14} className="text-gray-400" />
+                <span className="text-gray-400">{quoteData.avgDuration} hrs</span>
               </div>
               <div className="flex items-center gap-2">
-                <History size={16} className="text-gray-400" />
+                <History size={14} className="text-gray-400" />
                 <span className="text-gray-400">
                   {quoteData.count} {quoteData.tier === 1 ? 'standard job' : quoteData.tier === 2 ? 'work order' : 'similar job'}{quoteData.count !== 1 ? 's' : ''}
                 </span>
+              </div>
+              <div className="text-gray-500">
+                Range: ${quoteData.lowTotal.toLocaleString()} – ${quoteData.highTotal.toLocaleString()}
               </div>
             </div>
           </div>
@@ -882,39 +919,51 @@ const App = () => {
           )}
 
           {/* Cost Breakdown */}
-          <div className="bg-white rounded-xl p-4 shadow-sm">
-            <h3 className="font-bold text-gray-900 mb-3">Average Cost Breakdown</h3>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <Clock size={18} className="text-gray-400" />
-                  <span>Labor</span>
+          {(() => {
+            const adj = getAdjustedQuote(quoteData, priceAdjustment);
+            return (
+              <div className="bg-white rounded-xl p-4 shadow-sm">
+                <h3 className="font-bold text-gray-900 mb-3">
+                  Cost Breakdown
+                  {priceAdjustment !== 0 && (
+                    <span className="ml-2 text-xs font-medium text-amber-600">
+                      ({priceAdjustment > 0 ? '+' : ''}{priceAdjustment}% applied)
+                    </span>
+                  )}
+                </h3>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Clock size={18} className="text-gray-400" />
+                      <span>Labor</span>
+                    </div>
+                    <span className="font-bold">${adj.avgLabor.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Package size={18} className="text-gray-400" />
+                      <span>Parts{quoteData.partsRepriced ? ' (catalog)' : quoteData.partsFallbackToHistorical ? ' (historical)' : ''}</span>
+                    </div>
+                    <span className="font-bold">${adj.avgParts.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Wrench size={18} className="text-gray-400" />
+                      <span>Misc/Shop Supplies</span>
+                    </div>
+                    <span className="font-bold">${adj.avgMisc.toLocaleString()}</span>
+                  </div>
+                  <div className="border-t pt-3 flex justify-between items-center">
+                    <span className="font-bold text-lg">Quote Total</span>
+                    <span className="font-bold text-xl text-amber-600">${adj.avgTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="text-xs text-gray-500 text-right">
+                    Est. duration: {quoteData.avgDuration} hrs ({quoteData.lowDuration} - {quoteData.highDuration} range)
+                  </div>
                 </div>
-                <span className="font-bold">${quoteData.avgLabor.toLocaleString()}</span>
               </div>
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <Package size={18} className="text-gray-400" />
-                  <span>Parts{quoteData.partsRepriced ? ' (catalog)' : quoteData.partsFallbackToHistorical ? ' (historical)' : ''}</span>
-                </div>
-                <span className="font-bold">${quoteData.avgParts.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <Wrench size={18} className="text-gray-400" />
-                  <span>Misc/Shop Supplies</span>
-                </div>
-                <span className="font-bold">${quoteData.avgMisc.toLocaleString()}</span>
-              </div>
-              <div className="border-t pt-3 flex justify-between items-center">
-                <span className="font-bold text-lg">Average Total</span>
-                <span className="font-bold text-xl text-amber-600">${quoteData.avgTotal.toLocaleString()}</span>
-              </div>
-              <div className="text-xs text-gray-500 text-right">
-                Est. duration: {quoteData.avgDuration} hrs ({quoteData.lowDuration} - {quoteData.highDuration} range)
-              </div>
-            </div>
-          </div>
+            );
+          })()}
 
           {/* Distribution Charts */}
           {quoteData.entries && quoteData.entries.length > 1 && (
@@ -1051,6 +1100,7 @@ const App = () => {
                     </div>
                     <div className="text-xs text-gray-500">
                       {seg.compCode.desc} • Tier {seg.tier} • {seg.confidence}
+                      {seg.adjustmentPct ? <span className="ml-1 text-amber-600 font-medium">• {seg.adjustmentPct > 0 ? '+' : ''}{seg.adjustmentPct}%</span> : null}
                     </div>
                     <div className="text-xs text-gray-600 mt-1">
                       Parts ${seg.avgParts.toLocaleString()} + Labor ${seg.avgLabor.toLocaleString()} + Misc ${seg.avgMisc.toLocaleString()} = <span className="font-bold">${seg.avgTotal.toLocaleString()}</span>
@@ -1484,44 +1534,67 @@ const App = () => {
                   </div>
 
                   <div className="p-6">
+                    {(() => {
+                      const adj = getAdjustedQuote(quoteData, priceAdjustment);
+                      return (
                     <div className="grid grid-cols-3 gap-6 mb-6">
                       <div className="col-span-2">
-                        <h3 className="font-bold text-gray-900 mb-4">Quote Summary</h3>
+                        <h3 className="font-bold text-gray-900 mb-1">Quote Summary</h3>
+                        <p className="text-xs text-gray-500 mb-4">Recommended quote uses current catalog parts pricing + recency-weighted labor. Use ±10% to flex.</p>
                         <div className="grid grid-cols-3 gap-4 mb-6">
-                          <div className="bg-gray-50 rounded-lg p-4 text-center">
-                            <div className="text-sm text-gray-500">Lowest</div>
-                            <div className="text-xl font-bold text-gray-600">${quoteData.lowTotal.toLocaleString()}</div>
-                            <div className="text-xs text-gray-400">{quoteData.lowDuration} hrs</div>
-                          </div>
-                          <div className="bg-amber-50 rounded-lg p-4 text-center border-2 border-amber-500">
-                            <div className="text-sm text-amber-600 font-medium">Average</div>
-                            <div className="text-3xl font-bold text-amber-600">${quoteData.avgTotal.toLocaleString()}</div>
-                            <div className="text-xs text-amber-500">{quoteData.avgDuration} hrs</div>
-                          </div>
-                          <div className="bg-gray-50 rounded-lg p-4 text-center">
-                            <div className="text-sm text-gray-500">Highest</div>
-                            <div className="text-xl font-bold text-gray-600">${quoteData.highTotal.toLocaleString()}</div>
-                            <div className="text-xs text-gray-400">{quoteData.highDuration} hrs</div>
-                          </div>
+                          {[-10, 0, 10].map(pct => {
+                            const candidate = getAdjustedQuote(quoteData, pct);
+                            const isActive = priceAdjustment === pct;
+                            const label = pct === 0 ? 'Recommended' : pct < 0 ? `${pct}%` : `+${pct}%`;
+                            const sub = pct === 0 ? 'Generated quote' : pct < 0 ? 'More aggressive' : 'More conservative';
+                            return (
+                              <button
+                                key={pct}
+                                type="button"
+                                onClick={() => setPriceAdjustment(pct as -10 | 0 | 10)}
+                                className={`rounded-lg p-4 text-center transition ${
+                                  isActive
+                                    ? 'bg-amber-50 border-2 border-amber-500 shadow-sm'
+                                    : 'bg-gray-50 border-2 border-transparent hover:border-gray-300'
+                                }`}
+                              >
+                                <div className={`text-sm font-medium ${isActive ? 'text-amber-700' : 'text-gray-600'}`}>{label}</div>
+                                <div className={`font-bold ${isActive ? 'text-3xl text-amber-600' : 'text-xl text-gray-700'}`}>
+                                  ${candidate.avgTotal.toLocaleString()}
+                                </div>
+                                <div className={`text-xs ${isActive ? 'text-amber-500' : 'text-gray-400'}`}>{sub}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="text-xs text-gray-400 mb-4 text-center">
+                          Historical range across {quoteData.count} {quoteData.tier === 1 ? 'STJs' : quoteData.tier === 2 ? 'work orders' : 'similar jobs'}: ${quoteData.lowTotal.toLocaleString()} – ${quoteData.highTotal.toLocaleString()} ({quoteData.lowDuration}–{quoteData.highDuration} hrs)
                         </div>
 
                         <table className="w-full">
                           <tbody className="divide-y divide-gray-100">
                             <tr>
                               <td className="py-3 text-gray-600">Labor ({quoteData.tier === 2 ? 'recency-weighted' : 'avg'} across {quoteData.count} {quoteData.tier === 1 ? 'STJs' : quoteData.tier === 2 ? 'WOs' : 'similar jobs'})</td>
-                              <td className="py-3 text-right font-bold">${quoteData.avgLabor.toLocaleString()}</td>
+                              <td className="py-3 text-right font-bold">${adj.avgLabor.toLocaleString()}</td>
                             </tr>
                             <tr>
-                              <td className="py-3 text-gray-600">Parts{quoteData.partsRepriced ? ' (current catalog pricing)' : quoteData.partsFallbackToHistorical ? ' (historical avg)' : ' (avg)'}</td>
-                              <td className="py-3 text-right font-bold">${quoteData.avgParts.toLocaleString()}</td>
+                              <td className="py-3 text-gray-600">Parts{quoteData.partsRepriced ? ' (current catalog pricing)' : quoteData.partsFallbackToHistorical ? ' (historical avg)' : ''}</td>
+                              <td className="py-3 text-right font-bold">${adj.avgParts.toLocaleString()}</td>
                             </tr>
                             <tr>
-                              <td className="py-3 text-gray-600">Shop/Misc (avg)</td>
-                              <td className="py-3 text-right font-bold">${quoteData.avgMisc.toLocaleString()}</td>
+                              <td className="py-3 text-gray-600">Shop/Misc</td>
+                              <td className="py-3 text-right font-bold">${adj.avgMisc.toLocaleString()}</td>
                             </tr>
                             <tr className="bg-gray-50">
-                              <td className="py-3 font-bold text-lg">Average Total</td>
-                              <td className="py-3 text-right font-bold text-xl text-amber-600">${quoteData.avgTotal.toLocaleString()}</td>
+                              <td className="py-3 font-bold text-lg">
+                                Quote Total
+                                {priceAdjustment !== 0 && (
+                                  <span className="ml-2 text-xs font-medium text-amber-600">
+                                    ({priceAdjustment > 0 ? '+' : ''}{priceAdjustment}% applied)
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 text-right font-bold text-xl text-amber-600">${adj.avgTotal.toLocaleString()}</td>
                             </tr>
                           </tbody>
                         </table>
@@ -1562,6 +1635,8 @@ const App = () => {
                         </div>
                       </div>
                     </div>
+                      );
+                    })()}
 
                     {/* Tier Override Note */}
                     {quoteData.tierOverride && (
@@ -1738,6 +1813,11 @@ const App = () => {
                               <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${seg.confidence === 'HIGH' ? 'text-green-600 bg-green-50' : seg.confidence === 'MEDIUM' ? 'text-yellow-600 bg-yellow-50' : 'text-red-600 bg-red-50'}`}>
                                 {seg.confidenceScore}%
                               </span>
+                              {seg.adjustmentPct ? (
+                                <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-bold text-amber-700 bg-amber-50">
+                                  {seg.adjustmentPct > 0 ? '+' : ''}{seg.adjustmentPct}%
+                                </span>
+                              ) : null}
                             </td>
                             <td className="px-4 py-3 text-right">${seg.avgParts.toLocaleString()}</td>
                             <td className="px-4 py-3 text-right">${seg.avgLabor.toLocaleString()}</td>
