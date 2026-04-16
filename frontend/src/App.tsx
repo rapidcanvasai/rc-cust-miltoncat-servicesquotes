@@ -1,6 +1,9 @@
 // @ts-nocheck
-import React, { useState, useMemo } from 'react';
-import { Search, Clock, Wrench, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Smartphone, Monitor, BarChart3, Package, History, Zap, Target, AlertCircle, X, RefreshCw, Download, Share2, Plus, Trash2, Wifi, WifiOff, Upload } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Search, Clock, Wrench, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, BarChart3, Package, History, Zap, Target, AlertCircle, X, RefreshCw, Download, Share2, Plus, Trash2, Wifi, WifiOff, Upload } from 'lucide-react';
+
+/** Matches Tailwind `lg` — below this width we show PSSR-style layout; at/above, admin desktop layout. */
+const DESKTOP_LAYOUT_MEDIA = '(min-width: 1024px)';
 import rawStjData from './data/standardJobs.json';
 import rawWoData from './data/workOrders.json';
 import partsIndex from './data/partsData.json';
@@ -284,7 +287,18 @@ const TOTAL_COMBOS = ALL_COMBO_KEYS.size;
 // ============================================
 
 const App = () => {
-  const [activeTab, setActiveTab] = useState('mobile');
+  const [useDesktopLayout, setUseDesktopLayout] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(DESKTOP_LAYOUT_MEDIA).matches : false,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia(DESKTOP_LAYOUT_MEDIA);
+    const onChange = () => setUseDesktopLayout(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   const [showQuoteResult, setShowQuoteResult] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [quoteData, setQuoteData] = useState<any>(null);
@@ -563,7 +577,7 @@ const App = () => {
   // MOBILE PSSR VIEW
   // ============================================
   const MobileView = () => (
-    <div className="max-w-md mx-auto bg-gray-100 min-h-screen">
+    <div className="max-w-md mx-auto bg-gray-100 w-full min-h-0">
       <div className="bg-gradient-to-r from-amber-500 to-amber-600 text-white p-4 sticky top-0 z-20">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -1311,7 +1325,7 @@ const App = () => {
   // ============================================
   const DesktopView = () => {
     return (
-      <div className="bg-gray-50 min-h-screen">
+      <div className="bg-gray-50 w-full min-h-0">
         <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b-4 border-amber-500">
           <div className="max-w-7xl mx-auto px-6 py-4">
             <div className="flex items-center justify-between">
@@ -1891,40 +1905,23 @@ const App = () => {
   // MAIN RENDER
   // ============================================
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="bg-white border-b shadow-sm sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex items-center justify-between py-3">
-            <div className="flex items-center gap-2">
-              <div className="text-sm text-gray-500">Demo View:</div>
-              <div className="flex bg-gray-100 rounded-lg p-1">
-                <button
-                  onClick={() => setActiveTab('mobile')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
-                    activeTab === 'mobile' ? 'bg-white shadow text-amber-600' : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  <Smartphone size={18} /> PSSR Mobile
-                </button>
-                <button
-                  onClick={() => setActiveTab('desktop')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
-                    activeTab === 'desktop' ? 'bg-white shadow text-amber-600' : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  <Monitor size={18} /> Admin Desktop
-                </button>
-              </div>
-            </div>
-            <div className="text-sm text-gray-500">
-              <span className="font-medium text-gray-900">RapidCanvas</span> × Milton CAT
-              <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{TOTAL_STJS.toLocaleString()} STJs + {TOTAL_WOS.toLocaleString()} WOs</span>
-            </div>
-          </div>
-        </div>
+    <div className="min-h-dvh bg-gray-100 flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col">
+        {useDesktopLayout ? <DesktopView /> : <MobileView />}
       </div>
-
-      {activeTab === 'mobile' ? <MobileView /> : <DesktopView />}
+      <footer className="shrink-0 border-t border-gray-200 bg-white/90 backdrop-blur-sm px-4 py-3 text-xs text-gray-500">
+        <div className="max-w-7xl mx-auto w-full flex flex-col items-center gap-1 sm:flex-row sm:justify-center sm:gap-3 sm:text-sm lg:justify-end">
+          <span>
+            <span className="font-medium text-gray-700">RapidCanvas</span>
+            <span className="mx-1 text-gray-400">×</span>
+            <span>Milton CAT</span>
+          </span>
+          <span className="hidden sm:inline text-gray-300">·</span>
+          <span className="text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+            {TOTAL_STJS.toLocaleString()} STJs + {TOTAL_WOS.toLocaleString()} WOs loaded
+          </span>
+        </div>
+      </footer>
     </div>
   );
 };
