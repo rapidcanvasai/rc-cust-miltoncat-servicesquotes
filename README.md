@@ -1,6 +1,6 @@
 # MiltonCAT Service Quotes
 
-Ferramenta de estimativa de preços para serviços de equipamentos CAT. Utiliza um motor de cotação em 3 camadas que combina dados de Standard Jobs, Work Orders históricos e similaridade entre equipamentos para gerar estimativas com score de confiança.
+Pricing estimation tool for CAT equipment services. Uses a 3-tier quote engine that combines Standard Jobs data, historical Work Orders, and equipment similarity scoring to generate estimates with a confidence score.
 
 ## Quick Start
 
@@ -10,59 +10,59 @@ npm install
 npm run dev
 ```
 
-O servidor de desenvolvimento roda em `http://localhost:8080`.
+The development server runs at `http://localhost:8080`.
 
-## Como Funciona
+## How It Works
 
-### Motor de Cotação (3 Tiers)
+### Quote Engine (3 Tiers)
 
-| Tier | Fonte | Confiança | Quando usa |
-|------|-------|-----------|------------|
-| **1 - Standard Job** | Tabela de preços padrão | 100% | Match exato de modelo + job + componente |
-| **2 - Work Order** | Histórico de ordens de serviço | Variável (baseada em CV e recência) | Match exato sem STJ disponível |
-| **3 - Similaridade** | Scoring multi-dimensional | Variável (baseada em overlap de peças e proximidade de labor) | Sem match exato — busca combinações similares |
+| Tier | Source | Confidence | When used |
+|------|--------|------------|-----------|
+| **1 - Standard Job** | Standard price catalog | 100% | Exact match on model + job + component |
+| **2 - Work Order** | Historical service orders | Variable (based on CV and recency) | Exact match when no STJ is available |
+| **3 - Similarity** | Multi-dimensional scoring | Variable (based on parts overlap and labor proximity) | No exact match — searches for similar combinations |
 
-Se o Tier 2 resulta em confiança < 35%, promove automaticamente para Tier 3.
+If Tier 2 results in confidence < 35%, it is automatically promoted to Tier 3.
 
-### Pipeline de Dados
+### Data Pipeline
 
 ```
 Excel (data/)  →  Python scripts (scripts/)  →  JSON (frontend/src/data/)  →  React App
 ```
 
-- `standardJobs.json` — Preços padrão por modelo/job/componente
-- `workOrders.json` — Histórico de ordens de serviço com datas para peso por recência
-- `partsData.json` — Catálogo de peças para repricing
+- `standardJobs.json` — Standard pricing by model/job/component
+- `workOrders.json` — Service order history with dates for recency weighting
+- `partsData.json` — Parts catalog for repricing
 
 ## Deploy
 
-O frontend é deployado na plataforma RapidCanvas com suporte a ambientes **dev** e **prod**:
+The frontend is deployed on the RapidCanvas platform with support for **dev** and **prod** environments:
 
 ```bash
-# Requer RAPIDCANVAS_API_KEY no .env da raiz
+# Requires RAPIDCANVAS_API_KEY in the root .env
 
-bash infra/deploy-frontend.sh          # Deploy para dev (default)
-bash infra/deploy-frontend.sh dev      # Deploy para dev (explícito)
-bash infra/deploy-frontend.sh prod     # Deploy para produção
+bash infra/deploy-frontend.sh          # Deploy to dev (default)
+bash infra/deploy-frontend.sh dev      # Deploy to dev (explicit)
+bash infra/deploy-frontend.sh prod     # Deploy to production
 ```
 
-O script faz upload do zip, atualiza o app template e relança o DataApp automaticamente.
+The script uploads the zip, updates the app template, and relaunches the DataApp automatically.
 
-### Configuração por Ambiente
+### Per-Environment Configuration
 
-Cada ambiente tem seu próprio arquivo de configuração em `infra/`:
+Each environment has its own configuration file under `infra/`:
 
-| Arquivo | Ambiente | DataApp ID |
-|---------|----------|------------|
-| `.rapidcanvas.dev` | Desenvolvimento | `cc3403a8-0cec-4638-bd16-3a2730cf16fb` |
-| `.rapidcanvas.prod` | Produção | `6e736bdf-68fd-43ab-ac00-e078fb205a76` |
+| File | Environment | DataApp ID |
+|------|-------------|------------|
+| `.rapidcanvas.dev` | Development | `cc3403a8-0cec-4638-bd16-3a2730cf16fb` |
+| `.rapidcanvas.prod` | Production | `6e736bdf-68fd-43ab-ac00-e078fb205a76` |
 
-O script seleciona automaticamente o arquivo correto com base no argumento passado. O `vite.config.ts` é atualizado com o slug do DataApp correspondente durante o deploy.
+The script automatically selects the correct file based on the argument passed. `vite.config.ts` is updated with the corresponding DataApp slug during deploy.
 
 ## Tech Stack
 
 - **Frontend:** React 18, TypeScript, Vite, TailwindCSS
-- **Visualização:** Recharts
-- **Estado:** React Query + state local (sem Redux)
+- **Visualization:** Recharts
+- **State:** React Query + local state (no Redux)
 - **Deploy:** RapidCanvas (DataApp iframe)
-- **Transformação:** Python scripts para conversão Excel → JSON
+- **Transformation:** Python scripts for Excel → JSON conversion
